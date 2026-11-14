@@ -5,10 +5,13 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 
 	"github.com/paralin/modlock/devmount"
+	s2panorama "github.com/paralin/modlock/source2/panorama"
 	"github.com/paralin/modlock/source2/vpk"
 )
 
@@ -98,5 +101,59 @@ func TestMountRendererCarriesMaps(t *testing.T) {
 	}
 	if err := mounted.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestRendererFilesBootTheBridge compiles the renderer's files from a game
+// whose news layout is stock: the boot script names the bridge, or no page
+// for the default, and the news layout keeps the game's panels and adds the
+// boot script.
+func TestRendererFilesBootTheBridge(t *testing.T) {
+	// A game whose archive holds only the stock news layout.
+	citadel := filepath.Join(t.TempDir(), "game", "citadel")
+	if err := os.MkdirAll(citadel, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stock, err := s2panorama.CompileTree("stock", fstest.MapFS{newsLayout: {Data: []byte(`<root><Panel id="StockNews" /></root>`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	if err := vpk.Write(&archive, stock); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(citadel, "pak01_dir.vpk"), archive.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	renderer := &Renderer{Script: []byte("// renderer\n"), Layout: []byte("// layout\n")}
+	bridge := "https://relay.example/app/relay/bridge.html?port=29700"
+	for _, test := range []struct {
+		bridge string
+		named  bool
+	}{{bridge, true}, {"", false}} {
+		files, err := RendererFiles(citadel, renderer, test.bridge)
+		if err != nil {
+			t.Fatal(err)
+		}
+		boot, ok := files["panorama/scripts/modlock/boot.vjs_c"]
+		if !ok {
+			t.Fatalf("no boot script in %v", slices.Sorted(maps.Keys(files)))
+		}
+		if named := bytes.Contains(boot.Data, []byte(bridgeAttribute)); named != test.named || test.named && !bytes.Contains(boot.Data, []byte(bridge)) {
+			t.Fatalf("boot script for bridge %q: %q", test.bridge, boot.Data)
+		}
+		news, err := s2panorama.Decompile(files["panorama/layout/latest_news.vxml_c"].Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(news, "StockNews") || !strings.Contains(news, "scripts/modlock/boot.vjs") {
+			t.Fatalf("news layout lost the stock panel or the boot script: %s", news)
+		}
+		for _, name := range []string{"panorama/layout/modlock/ui.vxml_c", "panorama/scripts/modlock/ui.vjs_c", "panorama/scripts/modlock/layout.vjs_c"} {
+			if _, ok := files[name]; !ok {
+				t.Fatalf("%s is missing", name)
+			}
+		}
 	}
 }

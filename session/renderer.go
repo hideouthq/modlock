@@ -99,7 +99,7 @@ func mountRenderer(gameDir string, renderer *Renderer, bridge string, content fs
 	citadel := filepath.Join(gameDir, "game", "citadel")
 	files := fstest.MapFS{}
 	if renderer != nil {
-		compiled, err := rendererFiles(citadel, renderer, bridge)
+		compiled, err := RendererFiles(citadel, renderer, bridge)
 		if err != nil {
 			return nil, err
 		}
@@ -216,10 +216,13 @@ func isMapArchive(name string) bool {
 	return path.Dir(name) == check.MapsDir && path.Ext(name) == ".vpk"
 }
 
-// rendererFiles compiles the renderer's files: the installed news layout
-// with the boot script added, the boot script naming the relay page bridge,
-// and the renderer's layout and scripts.
-func rendererFiles(citadel string, renderer *Renderer, bridge string) (fstest.MapFS, error) {
+// RendererFiles compiles the renderer's files from the game's citadel
+// directory: the installed news layout with the boot script added, the boot
+// script naming the relay page bridge, or the renderer's default page when
+// bridge is empty, and the renderer's layout and scripts. A host that mounts
+// its own package, such as one that serves the screen on its own port, builds
+// the renderer's part of it here with bridge carrying that port.
+func RendererFiles(citadel string, renderer *Renderer, bridge string) (fstest.MapFS, error) {
 	stock, err := vpk.OpenArchive(filepath.Join(citadel, "pak01_dir.vpk"))
 	if err != nil {
 		return nil, err

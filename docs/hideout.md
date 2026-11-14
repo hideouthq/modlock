@@ -31,7 +31,8 @@ remaining checks.
 
 | Extension | Owner | Contract |
 | --- | --- | --- |
-| Definition readback | Native definition layer | `readDefinitionField` reads the first float of a definition field, found by the same file, entry and path rules the manifest's `definitions` write through |
+| Definition readback | Native definition layer | `readDefinitionField` reads the first float of a float field, or the whole number of a flag, integer or enum field within ±16777215, found by the same file, entry and path rules the manifest's `definitions` write through |
+| Whole-number definition fields | Native definition layer | A manifest `fields` value on a flag, integer or enum field is written in the field's own width once it is a whole number that width holds (an enum: its signed range) and within ±16777215, the most the manifest's float holds exactly; any other value is refused with the field's range |
 | Scripted press bypass and cancellation | Native input layer | A queued press bypasses blocking for one input; cancellation removes undelivered queued buttons |
 | Packaged image dimensions | Panorama content compiler | Stylesheet image tables use dimensions from packaged VTEX headers |
 | Numeric native tier bonuses | Native definition layer | Replace values of existing ability-upgrade rows; preserve native costs and row identity. `Definition.upgrades` and `upgrade_order` are fields 100 and 101, clear of upstream's numbers |

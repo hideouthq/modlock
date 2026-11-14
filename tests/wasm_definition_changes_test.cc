@@ -1,11 +1,14 @@
 // Contract tests for manifest definition changes: float, range-float,
-// modifier-level-float, map, modifier script value and copied fields write
-// into parsed definitions and restore cleanly through DefinitionUndo.
+// modifier-level-float, whole-number, map, modifier script value and copied
+// fields write into parsed definitions and restore cleanly through
+// DefinitionUndo, and readback reads floats and whole numbers.
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "fake_schema_system.h"
@@ -22,7 +25,7 @@ using modlock::test::MakeSchemaField;
 using modlock::wasm::ChangeDefinition;
 using modlock::wasm::Definition;
 using modlock::wasm::DefinitionUndo;
-using modlock::wasm::ReadDefinitionFloat;
+using modlock::wasm::ReadDefinitionNumber;
 
 // FakeSchema declares the classes and enums the tests below change.
 struct FakeSchema : modlock::test::FakeSchemaSystem {
@@ -39,6 +42,8 @@ struct FakeSchema : modlock::test::FakeSchemaSystem {
         "CResourceNameTyped< CWeakHandle< InfoForResourceTypeIParticleSystemDefinition > >";
     bool_type.name = "bool";
     tier_type.name = "EModTier_t";
+    uint8_type.name = "uint8";
+    int16_type.name = "int16";
 
     // Declare ModifierScriptValue_t: a 2-byte EModifierValue key at +0, a
     // 4-level float at +8 and a 32-byte stride.
@@ -87,6 +92,8 @@ struct FakeSchema : modlock::test::FakeSchemaSystem {
         MakeSchemaField("m_mapWeaponInfos", weapon_map_type, 0),
         MakeSchemaField("m_iItemTier", tier_type, 40),
         MakeSchemaField("m_bDisabled", bool_type, 44),
+        MakeSchemaField("m_nCharges", uint8_type, 45),
+        MakeSchemaField("m_nOffset", int16_type, 46),
     };
     classes.push_back(schema::ClassInfo{
         .name = "CitadelAbilityVData",
@@ -145,10 +152,12 @@ struct FakeSchema : modlock::test::FakeSchemaSystem {
   schema::DeclaredType particle_type{};
   schema::DeclaredType bool_type{};
   schema::DeclaredType tier_type{};
+  schema::DeclaredType uint8_type{};
+  schema::DeclaredType int16_type{};
   std::array<schema::Field, 2> script_fields{};
   std::array<schema::Field, 6> modifier_fields{};
   std::array<schema::Field, 1> hero_fields{};
-  std::array<schema::Field, 3> ability_fields{};
+  std::array<schema::Field, 5> ability_fields{};
   std::array<schema::Field, 3> weapon_fields{};
   std::array<schema::Enumerator, 2> modifier_values{};
   std::array<schema::Enumerator, 1> stat_values{};
@@ -373,6 +382,83 @@ TEST(DefinitionChanges, WritesWholeNumbersInTheirOwnWidth) {
   EXPECT_EQ(storage[40], 0xab);
 }
 
+TEST(DefinitionChanges, RefusesWholeNumbersTheirFieldCannotHold) {
+  // Each value below would land as another number: truncated to the field's
+  // width, wrapped past its sign, or rounded by the manifest's float. Each
+  // is refused and leaves its field unchanged.
+  FakeSchema schema;
+  std::array<unsigned char, 48> storage{};
+  storage.fill(0xab);
+  const std::string tier = "CitadelAbilityVData.m_iItemTier";
+  const std::string disabled = "CitadelAbilityVData.m_bDisabled";
+  const std::string charges = "CitadelAbilityVData.m_nCharges";
+  const std::string offset = "CitadelAbilityVData.m_nOffset";
+  const std::vector<std::pair<std::string, float>> refused{
+      {charges, 300.0f},
+      {charges, -1.0f},
+      {disabled, 2.0f},
+      {tier, 128.0f},
+      {offset, 16777216.0f},
+      {offset, std::numeric_limits<float>::infinity()},
+      {offset, std::numeric_limits<float>::quiet_NaN()},
+  };
+  for (const auto& [path, value] : refused) {
+    Definition change;
+    change.set_entry("upgrade_test");
+    (*change.mutable_fields())[path] = value;
+    DefinitionUndo undo;
+    const auto problems =
+        ChangeDefinition(change, storage.data(), &schema.system, "server.dll", undo);
+    ASSERT_EQ(problems.size(), 1u) << path << " = " << value;
+  }
+  EXPECT_TRUE(std::ranges::all_of(storage, [](unsigned char byte) { return byte == 0xab; }));
+
+  // The errors name the field's range, and the float's.
+  Definition charge;
+  charge.set_entry("upgrade_test");
+  (*charge.mutable_fields())[charges] = 300.0f;
+  (*charge.mutable_fields())[offset] = -16777216.0f;
+  DefinitionUndo undo;
+  const auto problems =
+      ChangeDefinition(charge, storage.data(), &schema.system, "server.dll", undo);
+  EXPECT_TRUE(
+      std::ranges::contains(problems, charges + ": 300 does not fit uint8, which holds 0 to 255"));
+  EXPECT_TRUE(std::ranges::contains(
+      problems, offset + ": a whole number must lie within -16777215 and 16777215, the most a "
+                         "manifest's float holds exactly"));
+}
+
+TEST(DefinitionChanges, ReadsBackWholeNumbersInTheirOwnWidth) {
+  // A signed field reads back its sign, an unsigned one its full width, and
+  // an enum and a flag their values.
+  FakeSchema schema;
+  std::array<unsigned char, 48> storage{};
+  storage.fill(0xab);
+  Definition change;
+  change.set_entry("upgrade_test");
+  (*change.mutable_fields())["CitadelAbilityVData.m_iItemTier"] = -1.0f;
+  (*change.mutable_fields())["CitadelAbilityVData.m_bDisabled"] = 1.0f;
+  (*change.mutable_fields())["CitadelAbilityVData.m_nCharges"] = 255.0f;
+  (*change.mutable_fields())["CitadelAbilityVData.m_nOffset"] = -300.0f;
+  DefinitionUndo undo;
+  ASSERT_TRUE(ChangeDefinition(change, storage.data(), &schema.system, "server.dll", undo).empty());
+  for (const auto& [path, value] : std::vector<std::pair<std::string, float>>{
+           {"CitadelAbilityVData.m_iItemTier", -1.0f},
+           {"CitadelAbilityVData.m_bDisabled", 1.0f},
+           {"CitadelAbilityVData.m_nCharges", 255.0f},
+           {"CitadelAbilityVData.m_nOffset", -300.0f},
+       }) {
+    const auto read = ReadDefinitionNumber(storage.data(), &schema.system, "server.dll", path);
+    ASSERT_TRUE(read) << path << ": " << read.error();
+    EXPECT_EQ(*read, value) << path;
+  }
+  undo.Restore();
+  const auto restored = ReadDefinitionNumber(storage.data(), &schema.system, "server.dll",
+                                             "CitadelAbilityVData.m_nCharges");
+  ASSERT_TRUE(restored);
+  EXPECT_EQ(*restored, 171.0f);
+}
+
 TEST(DefinitionChanges, ReadsBackTheFirstFloatAChangeWrote) {
   // A modifier definition with a level float, a scalar float and a 16-byte
   // particle field.
@@ -384,7 +470,8 @@ TEST(DefinitionChanges, ReadsBackTheFirstFloatAChangeWrote) {
   std::memcpy(storage.data() + 24, &window, sizeof(window));
   const std::string duration_path = "CModifierVData_SetModelScale.m_flDuration";
   const std::string window_path = "CModifierVData_SetModelScale.m_flLingeringAssistWindow";
-  EXPECT_EQ(ReadDefinitionFloat(storage.data(), &schema.system, "server.dll", duration_path), 1.0f);
+  EXPECT_EQ(ReadDefinitionNumber(storage.data(), &schema.system, "server.dll", duration_path),
+            1.0f);
 
   // After a change, readback answers the written value.
   Definition change;
@@ -394,15 +481,15 @@ TEST(DefinitionChanges, ReadsBackTheFirstFloatAChangeWrote) {
   (*change.mutable_fields())[window_path] = 9.0f;
   DefinitionUndo undo;
   ASSERT_TRUE(ChangeDefinition(change, storage.data(), &schema.system, "server.dll", undo).empty());
-  EXPECT_EQ(ReadDefinitionFloat(storage.data(), &schema.system, "server.dll", duration_path),
+  EXPECT_EQ(ReadDefinitionNumber(storage.data(), &schema.system, "server.dll", duration_path),
             12.5f);
-  EXPECT_EQ(ReadDefinitionFloat(storage.data(), &schema.system, "server.dll", window_path), 9.0f);
+  EXPECT_EQ(ReadDefinitionNumber(storage.data(), &schema.system, "server.dll", window_path), 9.0f);
 
   // A field that holds no float is refused.
-  const auto particle = ReadDefinitionFloat(storage.data(), &schema.system, "server.dll",
-                                            "CModifierVData_SetModelScale.m_strParticleEffect");
+  const auto particle = ReadDefinitionNumber(storage.data(), &schema.system, "server.dll",
+                                             "CModifierVData_SetModelScale.m_strParticleEffect");
   ASSERT_FALSE(particle);
-  EXPECT_EQ(particle.error(), "not a float");
+  EXPECT_EQ(particle.error(), "not a float or whole number");
 }
 
 }  // namespace

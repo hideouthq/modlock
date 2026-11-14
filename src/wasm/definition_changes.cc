@@ -339,19 +339,83 @@ size_t FloatCount(std::string_view type, size_t size) {
   return type.empty() && size == sizeof(float) ? 1 : 0;
 }
 
-// WholeSize returns the width of a flag, integer or enum field a change can
-// write a whole number into, or zero for any other field.
-size_t WholeSize(void* schema, const char* module, const Place& place) {
-  if (place.type.empty() || place.script_values ||
-      (!place.type.starts_with("int") && !place.type.starts_with("uint") && place.type != "bool" &&
-       !gameinterop::SchemaEnumSizeOf(schema, module, std::string(place.type).c_str()))) {
-    return 0;
+// WholeField is a flag, integer or enum field a change writes a whole number
+// into: its width and the values that width holds.
+struct WholeField {
+  size_t size = 0;
+  bool is_signed = false;
+  int64_t min = 0;
+  uint64_t max = 0;
+};
+
+// kExactWhole bounds the whole numbers a manifest's float carries exactly.
+// From 2^24 on a float skips odd numbers, so 16777217 or a mask with a high
+// bit would arrive as another number.
+constexpr double kExactWhole = 16777216.0;
+
+// WholeFieldOf returns the whole-number field a place names, or nothing for
+// any other field. An enum holds the signed range of its width, as the game's
+// enums with -1 sentinels do.
+std::optional<WholeField> WholeFieldOf(void* schema, const char* module, const Place& place) {
+  static constexpr std::array<std::string_view, 4> kSigned{"int8", "int16", "int32", "int64"};
+  static constexpr std::array<std::string_view, 4> kUnsigned{"uint8", "uint16", "uint32", "uint64"};
+  if (place.type.empty() || place.script_values) {
+    return std::nullopt;
+  }
+  const bool is_bool = place.type == "bool";
+  const bool is_unsigned = std::ranges::contains(kUnsigned, place.type);
+  if (!is_bool && !is_unsigned && !std::ranges::contains(kSigned, place.type) &&
+      !gameinterop::SchemaEnumSizeOf(schema, module, std::string(place.type).c_str())) {
+    return std::nullopt;
   }
   auto layout = LayoutOf(schema, module, place.type);
-  if (!layout || layout->size > place.size || layout->size > sizeof(int64_t)) {
-    return 0;
+  if (!layout || !layout->size || layout->size > place.size || layout->size > sizeof(int64_t)) {
+    return std::nullopt;
   }
-  return layout->size;
+  WholeField field{.size = layout->size, .is_signed = !is_bool && !is_unsigned};
+  const auto bits = 8 * layout->size;
+  if (is_bool) {
+    field.max = 1;
+  } else if (is_unsigned) {
+    field.max = bits == 64 ? UINT64_MAX : (uint64_t{1} << bits) - 1;
+  } else {
+    field.min = bits == 64 ? INT64_MIN : -(int64_t{1} << (bits - 1));
+    field.max = bits == 64 ? INT64_MAX : (uint64_t{1} << (bits - 1)) - 1;
+  }
+  return field;
+}
+
+// WholeNumber checks that value fits field: a whole number a float carries
+// exactly, within the field's range. It returns the number or why not.
+std::expected<int64_t, std::string> WholeNumber(const WholeField& field, std::string_view type,
+                                                float value) {
+  if (!std::isfinite(value) || value != std::trunc(value)) {
+    return std::unexpected("a whole-number field takes a whole number");
+  }
+  if (std::fabs(value) >= kExactWhole) {
+    return std::unexpected(
+        "a whole number must lie within -16777215 and 16777215, the most a manifest's float "
+        "holds exactly");
+  }
+  const auto number = static_cast<int64_t>(value);
+  if (number < field.min || (number > 0 && static_cast<uint64_t>(number) > field.max)) {
+    return std::unexpected(std::to_string(number) + " does not fit " + std::string(type) +
+                           ", which holds " + std::to_string(field.min) + " to " +
+                           std::to_string(field.max));
+  }
+  return number;
+}
+
+// ReadWhole reads a whole-number field's value from storage, sign-extended
+// when the field is signed.
+int64_t ReadWhole(const WholeField& field, const unsigned char* storage) {
+  uint64_t bits = 0;
+  std::memcpy(&bits, storage, field.size);
+  const auto width = 8 * field.size;
+  if (field.is_signed && width < 64 && (bits >> (width - 1)) & 1) {
+    bits |= ~uint64_t{0} << width;
+  }
+  return static_cast<int64_t>(bits);
 }
 
 // ResolvePath resolves a path of Class.field steps separated by slashes, such
@@ -713,25 +777,26 @@ std::vector<std::string> ChangeDefinition(const Definition& change, unsigned cha
                 {change.properties().begin(), change.properties().end()}, undo, problems);
   for (const auto& [path, value] : change.fields()) {
     auto place = ResolvePath(schema, module_name, path);
-    const auto whole = place && !place->floats ? WholeSize(schema, module_name, *place) : 0;
+    const auto whole =
+        place && !place->floats ? WholeFieldOf(schema, module_name, *place) : std::nullopt;
     auto* storage = place && (place->floats || whole) ? Locate(definition, *place) : nullptr;
     if (!storage) {
       problems.push_back(path + ": " +
-                         (!place                       ? place.error()
+                         (!place                     ? place.error()
                           : !place->floats && !whole ? "not a float or whole number"
-                                                       : "no such map key"));
+                                                     : "no such map key"));
       continue;
     }
     if (whole) {
       // A whole-number field, such as a flag or an enum, takes the value in
-      // its own width.
-      if (value != std::trunc(value)) {
-        problems.push_back(path + ": a whole-number field takes a whole number");
+      // its own width, little-endian, once it fits that width.
+      auto number = WholeNumber(*whole, place->type, value);
+      if (!number) {
+        problems.push_back(path + ": " + number.error());
         continue;
       }
-      const auto number = static_cast<int64_t>(value);
-      undo.Save(storage, whole, world);
-      std::memcpy(storage, &number, whole);
+      undo.Save(storage, whole->size, world);
+      std::memcpy(storage, &*number, whole->size);
       continue;
     }
     const std::array<float, 4> values{value, value, value, value};
@@ -804,28 +869,38 @@ std::expected<std::vector<std::string>, std::string> ChangeDefinitions(
   return problems;
 }
 
-std::expected<float, std::string> ReadDefinitionFloat(unsigned char* definition, void* schema,
-                                                      const char* module_name,
-                                                      std::string_view path) {
+std::expected<float, std::string> ReadDefinitionNumber(unsigned char* definition, void* schema,
+                                                       const char* module_name,
+                                                       std::string_view path) {
   auto place = ResolvePath(schema, module_name, path);
   if (!place) {
     return std::unexpected(place.error());
   }
-  if (!place->floats) {
-    return std::unexpected("not a float");
+  const auto whole = place->floats ? std::nullopt : WholeFieldOf(schema, module_name, *place);
+  if (!place->floats && !whole) {
+    return std::unexpected("not a float or whole number");
   }
   auto* storage = Locate(definition, *place);
   if (!storage) {
     return std::unexpected("no such map key");
+  }
+  if (whole) {
+    // A whole number reads back only while a float carries it exactly.
+    const auto number = ReadWhole(*whole, storage);
+    if (number <= -static_cast<int64_t>(kExactWhole) ||
+        number >= static_cast<int64_t>(kExactWhole)) {
+      return std::unexpected(std::to_string(number) + " is past what a float holds exactly");
+    }
+    return static_cast<float>(number);
   }
   float value = 0;
   std::memcpy(&value, storage, sizeof(value));
   return value;
 }
 
-std::expected<float, std::string> ReadDefinitionFloat(const gameinterop::ModuleImage& module,
-                                                      void* schema, const char* module_name,
-                                                      const DefinitionFieldOptions& request) {
+std::expected<float, std::string> ReadDefinitionNumber(const gameinterop::ModuleImage& module,
+                                                       void* schema, const char* module_name,
+                                                       const DefinitionFieldOptions& request) {
   Definition definition;
   definition.set_file(request.file());
   definition.set_entry(request.entry());
@@ -834,7 +909,7 @@ std::expected<float, std::string> ReadDefinitionFloat(const gameinterop::ModuleI
   if (!found) {
     return std::unexpected(found.error().error);
   }
-  return ReadDefinitionFloat(*found, schema, module_name, request.field());
+  return ReadDefinitionNumber(*found, schema, module_name, request.field());
 }
 
 }  // namespace modlock::wasm

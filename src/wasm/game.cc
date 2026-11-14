@@ -368,7 +368,7 @@ std::expected<DefinitionFieldResponse, std::string> Game::ReadDefinitionField(
   if (!image || !schema) {
     return std::unexpected("definition readback needs the loaded server and schema system");
   }
-  auto value = ReadDefinitionFloat(*image, *schema, "server.dll", request);
+  auto value = ReadDefinitionNumber(*image, *schema, "server.dll", request);
   if (!value) {
     return std::unexpected(value.error());
   }

@@ -80,16 +80,18 @@ std::expected<std::vector<std::string>, std::string> ChangeDefinitions(
     const google::protobuf::RepeatedPtrField<wasm::Definition>& definitions, DefinitionUndo& undo,
     const DefinitionText& text = {});
 
-// ReadDefinitionFloat reads the first float of the field at path in one
-// entry's parsed data, through the same path rules a change writes through.
-std::expected<float, std::string> ReadDefinitionFloat(unsigned char* definition, void* schema,
-                                                      const char* module_name,
-                                                      std::string_view path);
+// ReadDefinitionNumber reads the field at path in one entry's parsed data,
+// through the same path rules a change writes through: the first float of a
+// float field, or the whole number of a flag, integer or enum field, which
+// fails past what a float holds exactly.
+std::expected<float, std::string> ReadDefinitionNumber(unsigned char* definition, void* schema,
+                                                       const char* module_name,
+                                                       std::string_view path);
 
-// ReadDefinitionFloat finds the entry a request names in one game module and
-// reads the first float of its field.
-std::expected<float, std::string> ReadDefinitionFloat(const gameinterop::ModuleImage& module,
-                                                      void* schema, const char* module_name,
-                                                      const DefinitionFieldOptions& request);
+// ReadDefinitionNumber finds the entry a request names in one game module and
+// reads its field.
+std::expected<float, std::string> ReadDefinitionNumber(const gameinterop::ModuleImage& module,
+                                                       void* schema, const char* module_name,
+                                                       const DefinitionFieldOptions& request);
 
 }  // namespace modlock::wasm

@@ -44,24 +44,41 @@ func MapName(name string) error {
 	return errors.Errorf("mod.json's map %q is not a Deadlock map; name the mod's own map %s<name> and put it in %s/%s<name>.vpk", name, ModMapPrefix, MapsDir, ModMapPrefix)
 }
 
-// Map checks that the built mod or project in dist plays a map every player
-// has: a stock map, or a map whose maps/<map>.vpk dist ships. The session
-// mounts a shipped map under any name, so a mode that ships its map keeps the
-// name the map was compiled under; an hl_ map must be shipped.
+// Map checks that the built mod in dist plays a map every player has: a
+// stock map, or a map whose maps/<map>.vpk dist ships. The session mounts a
+// shipped map under any name, so a mode that ships its map keeps the name the
+// map was compiled under; an hl_ map must be shipped.
 func Map(dist fs.FS, name string) error {
-	shipped := path.Join(MapsDir, name+".vpk")
-	if name != "" && fs.ValidPath(shipped) {
-		if _, err := fs.Stat(dist, shipped); err == nil {
-			return nil
-		}
+	if Ships(dist, name) {
+		return nil
 	}
 	if err := MapName(name); err != nil || !strings.HasPrefix(name, ModMapPrefix) {
 		return err
 	}
-	if _, err := fs.Stat(dist, shipped); err != nil {
-		return errors.Errorf("mod.json plays the map %s, but the build has no %s; put the compiled map in the project's %s", name, shipped, shipped)
+	shipped := path.Join(MapsDir, name+".vpk")
+	return errors.Errorf("mod.json plays the map %s, but the build has no %s; put the compiled map in the project's %s", name, shipped, shipped)
+}
+
+// ProjectMap checks mod.json's map as a project in dir opens: a map the
+// project already ships as maps/<map>.vpk passes under any name, as Map lets
+// it through at publish, and any other name follows MapName, so an hl_ map
+// the author has not compiled yet still opens and fails only at publish.
+func ProjectMap(dir fs.FS, name string) error {
+	if Ships(dir, name) {
+		return nil
 	}
-	return nil
+	return MapName(name)
+}
+
+// Ships reports whether dist, a built mod or a project, holds name's
+// maps/<map>.vpk.
+func Ships(dist fs.FS, name string) bool {
+	shipped := path.Join(MapsDir, name+".vpk")
+	if name == "" || !fs.ValidPath(shipped) {
+		return false
+	}
+	_, err := fs.Stat(dist, shipped)
+	return err == nil
 }
 
 // AssetDirs are the built mod's directories of compiled game resources that

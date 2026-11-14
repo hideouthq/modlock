@@ -68,3 +68,37 @@ func TestManifestRoundTrip(t *testing.T) {
 		t.Fatalf("built %s names the language", built)
 	}
 }
+
+// TestOpenMap opens a project whose hl_ map is not compiled yet and one
+// that ships its map under another name, and refuses a map it does not ship
+// under another name.
+func TestOpenMap(t *testing.T) {
+	for _, test := range []struct {
+		name, shipped, fail string
+	}{
+		{"hl_arena_pit", "", ""},
+		{"arena_pit_v1", "arena_pit_v1", ""},
+		{"arena_pit_v1", "", "hl_<name>"},
+	} {
+		dir := t.TempDir()
+		manifest := &wasm.Manifest{Slug: "arena", Version: "0.1.0", Language: wasm.Manifest_LANGUAGE_GO, Map: test.name}
+		if err := WriteManifest(filepath.Join(dir, ManifestFile), manifest); err != nil {
+			t.Fatal(err)
+		}
+		if test.shipped != "" {
+			if err := os.MkdirAll(filepath.Join(dir, "maps"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "maps", test.shipped+".vpk"), []byte("vpk"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_, err := Open(dir)
+		switch {
+		case test.fail == "" && err != nil:
+			t.Fatal(test.name, err)
+		case test.fail != "" && (err == nil || !strings.Contains(err.Error(), test.fail)):
+			t.Fatalf("%s: got %v, want an error containing %q", test.name, err, test.fail)
+		}
+	}
+}

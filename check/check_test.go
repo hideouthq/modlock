@@ -98,3 +98,29 @@ func TestMap(t *testing.T) {
 		}
 	}
 }
+
+// TestProjectMap opens a project whose hl_ map is not compiled yet, as
+// upstream does, and one that ships a map under another name, and still
+// refuses a map only its author's game has.
+func TestProjectMap(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		dir  fstest.MapFS
+		fail string
+	}{
+		{"", nil, ""},
+		{"dl_midtown", nil, ""},
+		{"hl_arena_pit", nil, ""},
+		{"arena_pit_v1", fstest.MapFS{"maps/arena_pit_v1.vpk": {Data: []byte("vpk")}}, ""},
+		{"arena_pit_v1", nil, "hl_<name>"},
+		{"../arena", nil, "hl_<name>"},
+	} {
+		err := ProjectMap(test.dir, test.name)
+		switch {
+		case test.fail == "" && err != nil:
+			t.Fatal(test.name, err)
+		case test.fail != "" && (err == nil || !strings.Contains(err.Error(), test.fail)):
+			t.Fatalf("%s: got %v, want an error containing %q", test.name, err, test.fail)
+		}
+	}
+}

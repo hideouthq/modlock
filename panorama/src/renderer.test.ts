@@ -36,6 +36,7 @@ import {
 import { decodeUtf8 } from './packed.js'
 import { layoutUnloading } from './data.js'
 import { NativeChanges, savedAttribute } from './native.js'
+import { ScreenHold } from './hold.js'
 import { Frame } from '../stream.pb.js'
 
 test('unloads layouts before removing, replacing or reloading their ancestors', () => {
@@ -2280,6 +2281,119 @@ test("a screen end unloads layouts and leaves the HUD to the game's CSS", () => 
   minimap.loadCss('collapse')
   testing.loadCss('visible')
   expect([minimap.visible, testing.visible]).toEqual([false, true])
+})
+
+test('the guard leaves a panel whose visibility a layout holds to the layout', () => {
+  const hud = gameHud()
+  const layout = new NativeChanges($, () => hud.game)
+  const stock = new StockGuard(hud.game, clock())
+
+  // A layout's hide outlasts the guard giving the same part back.
+  layout.hide(hud.souls)
+  stock.screen(parts('HUD_PART_SOULS'))
+  expect(hud.souls.visible).toBe(false)
+  stock.screen([])
+  expect([hud.souls.visible, hud.souls.style.visibility]).toEqual([
+    false,
+    'collapse',
+  ])
+
+  // A layout that hides a panel the guard hid keeps it hidden after the
+  // guard gives it back, and its release leaves it to the game's CSS.
+  stock.screen(parts('HUD_PART_MINIMAP'))
+  expect(hud.minimap.attributes.get(HIDDEN_MARK)).toBe('shown')
+  layout.hide(hud.minimap)
+  stock.leave()
+  expect(hud.minimap.visible).toBe(false)
+  expect(hud.minimap.attributes.get(HIDDEN_MARK)).toBe('')
+
+  // A guard that starts again leaves both alone.
+  new StockGuard(hud.game, clock())
+  expect([hud.souls.visible, hud.minimap.visible]).toEqual([false, false])
+  layout.release()
+  for (const panel of [hud.souls, hud.minimap])
+    expect([panel.visible, panel.style.visibility]).toEqual([true, null])
+
+  // Released, the panel is the guard's again.
+  stock.screen(parts('HUD_PART_SOULS'))
+  expect(hud.souls.visible).toBe(false)
+  stock.screen([])
+  expect(hud.souls.visible).toBe(true)
+})
+
+test('layouts unload and release their native changes when the guard gives the HUD back', () => {
+  const hud = gameHud()
+  const host = clock()
+  const shop = hud.add(hud.game, 'CitadelHudHeroShop')
+  const root = hud.add(hud.game, 'ModlockUi')
+  // A loaded layout releases its native changes as it hears it unloads.
+  const owners = new Map<FakePanel, NativeChanges>()
+  const loaded = () =>
+    root.descendants().filter((panel) => panel.layout !== '' && panel.valid)
+  const drawing = new Drawing(
+    {
+      ...$,
+      DispatchEvent: () => {
+        for (const [panel, owner] of owners) {
+          if (panel.GetAttributeString(layoutUnloading, '') === '1') {
+            owner.release()
+            owners.delete(panel)
+          }
+        }
+      },
+    },
+    root,
+    () => {},
+    { url: (_mod, path) => `file://arena/${path}`, unloaded: () => {} },
+  )
+  const stock = new StockGuard(hud.game, host)
+  const hold = new ScreenHold({
+    allowed: () => stock.allowed(),
+    draw: (screen) => drawing.draw(screen),
+    Schedule: host.Schedule,
+  })
+  const show = (screen: Screen | null) => {
+    stock.screen(screen ? hiddenParts(screen) : null)
+    hold.show(screen)
+    for (const panel of loaded()) {
+      if (owners.has(panel)) continue
+      const owner = new NativeChanges($, () => panel)
+      owner.hide(shop)
+      owners.set(panel, owner)
+    }
+  }
+  const arena = screen(
+    { id: '', children: ['hud'] },
+    { id: 'hud', kind: 'KIND_LAYOUT', layout: 'hud.xml' },
+  )
+
+  // Leaving unloads the layout at once, which shows the shop again.
+  show(arena)
+  expect([loaded().length, shop.visible]).toEqual([1, false])
+  stock.leave()
+  hold.check()
+  expect([loaded().length, shop.visible]).toEqual([0, true])
+
+  // A screen after the leave draws it again from the start.
+  show(arena)
+  expect([loaded().length, shop.visible]).toEqual([1, false])
+
+  // A lapsed lease unloads it on the next check, and a title draws it again.
+  host.time += LEASE_SECONDS
+  runScheduled()
+  expect([loaded().length, shop.visible]).toEqual([0, true])
+  runScheduled()
+  expect(scheduled.size).toBe(0)
+  stock.alive()
+  hold.check()
+  show(arena)
+  expect([loaded().length, shop.visible]).toEqual([1, false])
+
+  // The hideout unloads it without an event.
+  hud.game.classes.push(CONNECTED_TO_HIDEOUT)
+  runScheduled()
+  expect([loaded().length, shop.visible]).toEqual([0, true])
+  expect(shop.GetAttributeString(savedAttribute, '')).toBe('')
 })
 
 test("acknowledges the relay's keepalive and reports it", () => {

@@ -36,7 +36,7 @@ remaining checks.
 | Packaged image dimensions | Panorama content compiler | Stylesheet image tables use dimensions from packaged VTEX headers |
 | Numeric native tier bonuses | Native definition layer | Replace values of existing ability-upgrade rows; preserve native costs and row identity. `Definition.upgrades` and `upgrade_order` are fields 100 and 101, clear of upstream's numbers |
 | Layout unload callbacks | Panorama renderer and layout library | `Modlock.onUnload(handler)` runs once before a layout or its ancestor is removed or replaced; use it to cancel work |
-| Native panel changes | Panorama renderer and layout library | `Modlock.native` is the one way a layout changes the game's own panels; every change is released when the layout unloads, and a released visibility goes back to the game's own CSS |
+| Native panel changes | Panorama renderer and layout library | `Modlock.native` is the one way a layout changes the game's own panels; every change is released when the layout unloads, and a released visibility goes back to the game's own CSS. Layouts are drawn only while the stock guard may hold the HUD, and the guard leaves a panel whose visibility a layout holds |
 | Session commands | Relay and renderer | The relay stream carries `connect` to a loopback port and `disconnect`, which the renderer runs as console commands |
 | Pawn observer service fields | Native entity field layer | Existing field reads and writes resolve `CPlayer_ObserverServices` through a pawn's schema-declared observer services pointer |
 | Shipped maps keep their names | Project and publish checks | A map the project ships as `maps/<map>.vpk` passes under any name; upstream's `hl_` rule still refuses a map the mod does not ship. Name a new mode's map `hl_<name>` |
@@ -109,6 +109,16 @@ deleted. `Modlock.native` is the layout's own owner. `group()` makes another,
 for changes released early, such as a pooled tooltip's on hover-out. Make a
 group once and reuse it after each release. When a layout unloads, its
 `onUnload` callbacks run first, then every owner it made is released.
+
+The game's HUD panels persist from game to game, so the renderer draws the
+mods' screens, layouts included, only while the stock guard may hold the
+HUD: within its lease, with no disconnect or shutdown since the last screen,
+and outside the hideout. When the guard gives the HUD back, the drawing is
+cleared and every layout unloads and releases its changes; once the guard
+may hold the HUD again, the last screen is drawn afresh and its layouts load
+again. A panel whose visibility an owner holds is that owner's: the guard
+neither hides it for a part a screen claims nor shows it when it gives the
+part back, and drops its own mark from it.
 
 Panorama keeps a panel's `visible` apart from its inline `visibility`.
 Setting the style to `collapse` also turns `visible` off, clearing the style

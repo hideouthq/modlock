@@ -1,13 +1,17 @@
-// Native changes are the one way the renderer and mods' layouts change the
-// game's own panels. The first owner to change a property saves its original
-// on the panel, so every owner in every script context restores the same
-// value, and the last owner to release a property restores it.
+// Native changes are the one way mods' layouts change the game's own panels;
+// the renderer's stock guard (guard.ts) hides and gives back the HUD parts
+// screens claim, and leaves alone a panel whose visibility a layout holds.
+// The first owner to change a property saves its original on the panel, so
+// every owner in every script context restores the same value, and the last
+// owner to release a property restores it.
 //
 // In Panorama an inline visibility sets a panel's visible, clearing it
 // applies only the game's own CSS, and setting visible writes the inline
 // visibility. So visible is kept as style.visibility, and a restore turns
 // visible on before it writes the original, so a cleared style leaves the
 // panel to the game's CSS instead of hidden.
+
+import { HIDDEN_MARK } from './guard.js'
 
 /** NativePanel is the part of a game panel native changes use. */
 export interface NativePanel {
@@ -233,20 +237,25 @@ export class NativeChanges {
 }
 
 /**
- * guardMark names the attribute the renderer's stock guard leaves on a panel
- * it hid; "shown" means the inline collapse on the panel is the guard's.
- */
-const guardMark = 'modlock_hidden'
-
-/**
  * guardHid reports whether key is a visibility the stock guard wrote, which
- * is not the panel's original: the guard gives its own collapse back.
+ * is not the panel's original. The guard's "shown" mark means the inline
+ * collapse is its own; it leaves the panel to the owners from then on.
  */
 function guardHid(panel: NativePanel, key: Key): boolean {
   return (
     key === 'style.visibility' &&
-    panel.GetAttributeString(guardMark, '') === 'shown'
+    panel.GetAttributeString(HIDDEN_MARK, '') === 'shown'
   )
+}
+
+/**
+ * holdsVisibility reports whether an owner in any script context holds
+ * panel's visibility, which the stock guard then neither hides nor shows.
+ */
+export function holdsVisibility(
+  panel: Pick<NativePanel, 'GetAttributeString'>,
+): boolean {
+  return (readSaved(panel)['style.visibility']?.owners.length ?? 0) !== 0
 }
 
 /** top returns the root of the interface panel sits in. */
@@ -269,7 +278,9 @@ function write(panel: NativePanel, key: Key, value: Value): void {
   }
 }
 
-function readSaved(panel: NativePanel): Partial<Record<Key, Saved>> {
+function readSaved(
+  panel: Pick<NativePanel, 'GetAttributeString'>,
+): Partial<Record<Key, Saved>> {
   const text = panel.GetAttributeString(savedAttribute, '')
   return text === '' ? {} : (JSON.parse(text) as Partial<Record<Key, Saved>>)
 }

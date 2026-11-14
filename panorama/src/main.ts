@@ -8,6 +8,7 @@
 import { Bridge } from './bridge.js'
 import { AddonLayouts, Drawing, inputCommand, pressCommand } from './draw.js'
 import { StockGuard } from './guard.js'
+import { ScreenHold } from './hold.js'
 import {
   abilityBarMods,
   abilityRows,
@@ -93,6 +94,15 @@ const stock = new StockGuard(
   // Hiding the whole HUD leaves this layout, which reads the screens.
   [context],
 )
+// The mods' layouts, and the native changes they hold, live only while the
+// guard may hold the HUD.
+const hold = new ScreenHold({
+  allowed: () => stock.allowed(),
+  draw: (screen) => drawing.draw(screen),
+  Schedule: (seconds, callback) => {
+    $.Schedule(seconds, callback)
+  },
+})
 // The game says the player is leaving as they ask to, and as it shuts the
 // map down; a server that just goes away says neither, and the guard's lease
 // runs out instead. Both events go on to other handlers, and close the
@@ -101,6 +111,7 @@ for (const event of ['CitadelDisconnectFromGame', 'GameSystemGameShutdown']) {
   $.RegisterForUnhandledEvent(event, () => {
     stock.leave()
     drawing.release()
+    hold.check()
     return false
   })
 }
@@ -116,14 +127,17 @@ new Bridge(
   context.GetAttributeString('modlock_bridge', defaultBridge),
   (screen) => {
     layouts.follow(screen)
-    drawing.draw(screen)
     stock.screen(
       screen ? hiddenParts(screen) : null,
       abilityBarMods(screen),
       abilityRows(screen),
     )
+    hold.show(screen)
     cursor.set(cursorFreed(screen), cursorAsks(screen))
   },
   (command) => $.DispatchEvent('CitadelConCommand', command),
-  () => stock.alive(),
+  () => {
+    stock.alive()
+    hold.check()
+  },
 )

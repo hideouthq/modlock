@@ -10,6 +10,7 @@
 import { type AbilityRow, HudPart } from '../../src/wasm/ui/ui.pb.js'
 import { children } from './abilities.js'
 import { type AbilityHost, AbilityHud } from './ability-hud.js'
+import { holdsVisibility } from './native.js'
 
 export { BAR_GATE, BAR_MARK, SAME_CLICK_SECONDS } from './ability-hud.js'
 
@@ -221,8 +222,10 @@ function ownPanel(hud: GuardPanel, id: string): GuardPanel[] {
  * hidePanel hides one panel by its visible, marking whether it showed. A
  * panel the game shows again meanwhile is hidden again and marked shown.
  * Visible, unlike an inline visibility, comes back at once when set again.
+ * A panel whose visibility a layout's native changes hold is the layout's.
  */
 export function hidePanel(panel: GuardPanel): void {
+  if (holdsVisibility(panel)) return
   if (panel.visible) {
     panel.SetAttributeString(HIDDEN_MARK, 'shown')
     panel.visible = false
@@ -236,15 +239,18 @@ export function hidePanel(panel: GuardPanel): void {
  * showed comes back; one that did not is left to the game, since setting
  * visible overrides its style sheets: gameplay_hud stays collapsed until a
  * player joins a team. An inline collapse from Modlock's renderer before the
- * guard goes too.
+ * guard goes too. A panel whose visibility a layout's native changes hold
+ * only loses the mark: the layout's release gives it back.
  */
 export function restorePanel(panel: GuardPanel): void {
+  const held = holdsVisibility(panel)
   const mark = panel.GetAttributeString(HIDDEN_MARK, '')
   if (mark !== '') {
     panel.SetAttributeString(HIDDEN_MARK, '')
-    if (mark === 'shown') panel.visible = true
+    if (mark === 'shown' && !held) panel.visible = true
   }
-  if (panel.style.visibility === 'collapse') panel.style.visibility = null
+  if (!held && panel.style.visibility === 'collapse')
+    panel.style.visibility = null
 }
 
 /**

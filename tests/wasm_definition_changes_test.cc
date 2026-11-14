@@ -37,6 +37,8 @@ struct FakeSchema : modlock::test::FakeSchemaSystem {
     weapon_map_type.name = "CUtlOrderedMap< CGlobalSymbol, CCitadelWeaponInfo >";
     particle_type.name =
         "CResourceNameTyped< CWeakHandle< InfoForResourceTypeIParticleSystemDefinition > >";
+    bool_type.name = "bool";
+    tier_type.name = "EModTier_t";
 
     // Declare ModifierScriptValue_t: a 2-byte EModifierValue key at +0, a
     // 4-level float at +8 and a 32-byte stride.
@@ -83,10 +85,12 @@ struct FakeSchema : modlock::test::FakeSchemaSystem {
     // 24-byte CCitadelWeaponInfo with three bullet floats.
     ability_fields = {
         MakeSchemaField("m_mapWeaponInfos", weapon_map_type, 0),
+        MakeSchemaField("m_iItemTier", tier_type, 40),
+        MakeSchemaField("m_bDisabled", bool_type, 44),
     };
     classes.push_back(schema::ClassInfo{
         .name = "CitadelAbilityVData",
-        .size = 40,
+        .size = 48,
         .field_count = static_cast<uint16_t>(ability_fields.size()),
         .alignment = 8,
         .fields = ability_fields.data(),
@@ -119,6 +123,10 @@ struct FakeSchema : modlock::test::FakeSchemaSystem {
         .enumerators = modifier_values.data(),
     });
     enums.push_back(schema::EnumInfo{
+        .name = "EModTier_t",
+        .size = 1,
+    });
+    enums.push_back(schema::EnumInfo{
         .name = "EStatsType",
         .size = 4,
         .enumerator_count = static_cast<uint16_t>(stat_values.size()),
@@ -135,10 +143,12 @@ struct FakeSchema : modlock::test::FakeSchemaSystem {
   schema::DeclaredType map_type{};
   schema::DeclaredType weapon_map_type{};
   schema::DeclaredType particle_type{};
+  schema::DeclaredType bool_type{};
+  schema::DeclaredType tier_type{};
   std::array<schema::Field, 2> script_fields{};
   std::array<schema::Field, 6> modifier_fields{};
   std::array<schema::Field, 1> hero_fields{};
-  std::array<schema::Field, 1> ability_fields{};
+  std::array<schema::Field, 3> ability_fields{};
   std::array<schema::Field, 3> weapon_fields{};
   std::array<schema::Enumerator, 2> modifier_values{};
   std::array<schema::Enumerator, 1> stat_values{};
@@ -328,8 +338,39 @@ TEST(DefinitionChanges, ReportsNonFloatAndMissingScriptValueKeys) {
       ChangeDefinition(change, storage.data(), &schema.system, "server.dll", undo);
   ASSERT_EQ(problems.size(), 2u);
   EXPECT_TRUE(std::ranges::contains(
-      problems, "CModifierVData_SetModelScale.m_strParticleEffect: not a float"));
+      problems, "CModifierVData_SetModelScale.m_strParticleEffect: not a float or whole number"));
   EXPECT_TRUE(std::ranges::contains(problems, missing_key + ": no such map key"));
+}
+
+TEST(DefinitionChanges, WritesWholeNumbersInTheirOwnWidth) {
+  // An enum and a flag take a whole number in their own width, leave the
+  // padding after them, and restore through the undo; a fraction is refused.
+  FakeSchema schema;
+  std::array<unsigned char, 48> storage{};
+  storage.fill(0xab);
+  Definition change;
+  change.set_entry("upgrade_test");
+  (*change.mutable_fields())["CitadelAbilityVData.m_iItemTier"] = 0.0f;
+  (*change.mutable_fields())["CitadelAbilityVData.m_bDisabled"] = 1.0f;
+  DefinitionUndo undo;
+  EXPECT_TRUE(ChangeDefinition(change, storage.data(), &schema.system, "server.dll", undo).empty());
+  EXPECT_EQ(storage[40], 0);
+  EXPECT_EQ(storage[41], 0xab);
+  EXPECT_EQ(storage[44], 1);
+  EXPECT_EQ(storage[45], 0xab);
+  undo.Restore();
+  EXPECT_EQ(storage[40], 0xab);
+  EXPECT_EQ(storage[44], 0xab);
+
+  Definition fraction;
+  fraction.set_entry("upgrade_test");
+  (*fraction.mutable_fields())["CitadelAbilityVData.m_iItemTier"] = 1.5f;
+  const auto problems =
+      ChangeDefinition(fraction, storage.data(), &schema.system, "server.dll", undo);
+  ASSERT_EQ(problems.size(), 1u);
+  EXPECT_EQ(problems[0],
+            "CitadelAbilityVData.m_iItemTier: a whole-number field takes a whole number");
+  EXPECT_EQ(storage[40], 0xab);
 }
 
 TEST(DefinitionChanges, ReadsBackTheFirstFloatAChangeWrote) {

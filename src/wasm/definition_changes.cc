@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <map>
@@ -336,6 +337,21 @@ size_t FloatCount(std::string_view type, size_t size) {
     return size >= sizeof(float) ? 1 : 0;
   }
   return type.empty() && size == sizeof(float) ? 1 : 0;
+}
+
+// WholeSize returns the width of a flag, integer or enum field a change can
+// write a whole number into, or zero for any other field.
+size_t WholeSize(void* schema, const char* module, const Place& place) {
+  if (place.type.empty() || place.script_values ||
+      (!place.type.starts_with("int") && !place.type.starts_with("uint") && place.type != "bool" &&
+       !gameinterop::SchemaEnumSizeOf(schema, module, std::string(place.type).c_str()))) {
+    return 0;
+  }
+  auto layout = LayoutOf(schema, module, place.type);
+  if (!layout || layout->size > place.size || layout->size > sizeof(int64_t)) {
+    return 0;
+  }
+  return layout->size;
 }
 
 // ResolvePath resolves a path of Class.field steps separated by slashes, such
@@ -697,12 +713,25 @@ std::vector<std::string> ChangeDefinition(const Definition& change, unsigned cha
                 {change.properties().begin(), change.properties().end()}, undo, problems);
   for (const auto& [path, value] : change.fields()) {
     auto place = ResolvePath(schema, module_name, path);
-    auto* storage = place && place->floats ? Locate(definition, *place) : nullptr;
+    const auto whole = place && !place->floats ? WholeSize(schema, module_name, *place) : 0;
+    auto* storage = place && (place->floats || whole) ? Locate(definition, *place) : nullptr;
     if (!storage) {
       problems.push_back(path + ": " +
-                         (!place           ? place.error()
-                          : !place->floats ? "not a float"
-                                           : "no such map key"));
+                         (!place                       ? place.error()
+                          : !place->floats && !whole ? "not a float or whole number"
+                                                       : "no such map key"));
+      continue;
+    }
+    if (whole) {
+      // A whole-number field, such as a flag or an enum, takes the value in
+      // its own width.
+      if (value != std::trunc(value)) {
+        problems.push_back(path + ": a whole-number field takes a whole number");
+        continue;
+      }
+      const auto number = static_cast<int64_t>(value);
+      undo.Save(storage, whole, world);
+      std::memcpy(storage, &number, whole);
       continue;
     }
     const std::array<float, 4> values{value, value, value, value};

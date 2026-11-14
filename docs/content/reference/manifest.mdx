@@ -117,7 +117,7 @@ the stock values while play uses the changed ones.
 | `file`       | `FILE_ABILITIES`, the default, for abilities and items; `FILE_HEROES` for heroes; `FILE_BOT_DIFFICULTY` for bot difficulties; `FILE_NPC_UNITS` for units and the bot brain; or `FILE_MODIFIERS` for modifiers. |
 | `entry`      | The entry to change, such as `hero_priest`, `gunslinger_rocket_launcher`, `upgrade_colossus/modifier_colossus_active` or `k_ECitadelBotDifficulty_Hard`.                                                       |
 | `properties` | Ability properties and their new values, such as `AbilityCooldown`.                                                                                                                                            |
-| `fields`     | Float, range-float and modifier-level-float schema fields by `Class.m_field/Class.m_field` path, and their new values.                                                                                         |
+| `fields`     | Float, range-float, modifier-level-float, flag, integer and enum schema fields by `Class.m_field/Class.m_field` path, and their new values. A flag, integer or enum takes a whole number.                      |
 | `copyFields` | Copy the field at each value's path over the field at its key's path.                                                                                                                                          |
 | `textFields` | Text, symbol, sound event and Panorama image schema fields by `Class.m_field/Class.m_field` path, with `{addon}` replaced by the mod's content addon.                                                          |
 

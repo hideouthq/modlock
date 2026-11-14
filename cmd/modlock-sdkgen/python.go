@@ -27,6 +27,7 @@ from typing import Any, Literal
 
 import _modlock
 
+from . import heroes as _heroes
 from . import wire
 
 
@@ -68,6 +69,13 @@ def _with(options: Any, name: str, value: Any) -> dict[str, Any]:
     return request
 
 
+def _hero_name(name: str) -> str:
+    """_hero_name returns the game's name of the hero name names, as
+    hero_named matches it, or name itself when it names no released hero."""
+    hero = _heroes.hero_named(name)
+    return name if hero is None else hero.name
+
+
 `
 
 // pythonWriter writes the Python library's module.
@@ -79,6 +87,37 @@ type pythonWriter struct {
 	// absent holds the result field of each call that answers None when the
 	// host leaves it out.
 	absent map[*field]bool
+	// library reaches the messages and enums of the Host methods the
+	// handwritten library calls itself, such as Ui, and of the services
+	// outside Modlock, which it encodes as dicts.
+	library reach
+	// methods holds the handwritten methods of each class by its name, as the
+	// lines of the class body.
+	methods map[string]string
+}
+
+// pythonMethods cuts the handwritten methods of each class out of the
+// library. The library writes them as the body of a class named after it,
+// such as _PlayerMethods for Player, which keeps the file valid Python. It
+// returns the library without those classes and each body by class name.
+func pythonMethods(library []byte) ([]byte, map[string]string) {
+	// Find each class by name, and take its header and indented lines.
+	methods := map[string]string{}
+	for _, c := range classes {
+		header := "class _" + c.name + "Methods:\n"
+		before, after, found := strings.Cut(string(library), header)
+		if !found {
+			continue
+		}
+		lines := strings.SplitAfter(after, "\n")
+		end := 0
+		for end < len(lines) && (strings.HasPrefix(lines[end], " ") || strings.TrimSpace(lines[end]) == "") {
+			end++
+		}
+		methods[c.name] = strings.TrimRight(strings.Join(lines[:end], ""), "\n") + "\n"
+		library = []byte(before + strings.TrimLeft(strings.Join(lines[end:], ""), "\n"))
+	}
+	return library, methods
 }
 
 // writePython returns python/modlock/__init__.py, which ends with the
@@ -92,12 +131,23 @@ func writePython(s *schema) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	w := &pythonWriter{directions: s.directions(calls), s: s, calls: calls, absent: map[*field]bool{}}
+	library, methods := pythonMethods(library)
+	w := &pythonWriter{directions: s.directions(calls), s: s, calls: calls, absent: map[*field]bool{}, methods: methods}
 	for _, c := range calls {
 		if f := c.result; f != nil && f.message != nil && !f.repeated && !f.message.isBareUnion() {
 			w.absent[f] = true
 		}
 	}
+	for _, m := range s.host.methods {
+		if skipped[m.name] {
+			w.library.add(m.request)
+			w.library.add(m.response)
+		}
+	}
+	for _, m := range s.services {
+		w.library.add(m)
+	}
+	s.serviceAbsent(w.absent)
 	w.out.WriteString(pythonPreamble)
 	w.writeTypes()
 	for _, c := range classes {
@@ -124,10 +174,14 @@ func (w *pythonWriter) hasClass(m *message) bool {
 }
 
 // writeTypes writes the enums, with their tables, and the message types in
-// schema order.
+// schema order. An enum only the handwritten library encodes gets its table
+// alone, since a mod never names its values.
 func (w *pythonWriter) writeTypes() {
 	for _, e := range w.s.enumOrder {
 		if !w.enumsIn[e] && !w.enumsOut[e] {
+			if w.library.seen[e] {
+				w.writeEnumTable(e)
+			}
 			continue
 		}
 		writeComment(&w.out, "", "#", e.doc)
@@ -179,6 +233,18 @@ func (w *pythonWriter) writeTypes() {
 	}
 }
 
+// writeEnumTable writes the table that maps each of e's numbers to its name
+// and back, for an enum the module declares no type for.
+func (w *pythonWriter) writeEnumTable(e *enum) {
+	fmt.Fprintf(&w.out, "# _%s maps each %s to its number and back.\n", e.name, e.name)
+	fmt.Fprintf(&w.out, "_%s: dict[Any, Any] = {\n", e.name)
+	for _, v := range e.named() {
+		name := pythonValue(e, v)
+		fmt.Fprintf(&w.out, "    %d: %q,\n    %q: %d,\n", v.number, name, name, v.number)
+	}
+	w.out.WriteString("}\n\n\n")
+}
+
 // member returns the annotation and default of field f of message m. A mod
 // leaves out a member with a default; the rest it writes.
 func (w *pythonWriter) member(m *message, f *field) string {
@@ -210,20 +276,47 @@ func (w *pythonWriter) oneofType(o *oneof) string {
 }
 
 // writeClass writes one class: a frozen dataclass of its key, with its calls
-// as methods.
+// as methods. An interned class keeps one object for each number until
+// release forgets it, compares by identity, and makes every call of the
+// class return that object.
 func (w *pythonWriter) writeClass(c *class) {
-	fmt.Fprintf(&w.out, "@dataclasses.dataclass(frozen=True, slots=True)\nclass %s:\n", c.name)
+	// Open the table an interned class keeps, then the class.
+	table := "_" + snake(c.name) + "_objects"
+	flags := "frozen=True, slots=True"
+	if c.interned {
+		fmt.Fprintf(&w.out, "# %s holds the %s of each %s that %s(%s) made.\n", table, c.name, c.key, c.name, c.key)
+		fmt.Fprintf(&w.out, "%s: dict[int, %q] = {}\n\n\n", table, c.name)
+		flags += ", eq=False"
+	}
+	fmt.Fprintf(&w.out, "@dataclasses.dataclass(%s)\nclass %s:\n", flags, c.name)
 	writePythonDocstring(&w.out, "    ", c.doc)
 	if c.doc != "" {
 		w.out.WriteString("\n")
 	}
 	writeComment(&w.out, "    ", "#", c.keyDoc)
 	fmt.Fprintf(&w.out, "    %s: int\n", c.key)
+
+	// Intern the objects of an interned class.
+	if c.interned {
+		fmt.Fprintf(&w.out, "\n    def __new__(cls, %s: int) -> %q:\n", c.key, c.name)
+		writePythonDocstring(&w.out, "        ", fmt.Sprintf("__new__ returns the %s for %s, the same object each time until\nrelease forgets it, so == and dictionary keys tell whether two values\nare the same %s.", c.name, c.key, lowerCamel(c.noun)))
+		fmt.Fprintf(&w.out, "        held = %s.get(%s)\n        if held is None:\n", table, c.key)
+		fmt.Fprintf(&w.out, "            held = object.__new__(cls)\n            %s[%s] = held\n        return held\n", table, c.key)
+		fmt.Fprintf(&w.out, "\n    def __reduce__(self) -> tuple[type[%q], tuple[int]]:\n", c.name)
+		writePythonDocstring(&w.out, "        ", fmt.Sprintf("__reduce__ makes a copy of a %s the same object.", c.name))
+		fmt.Fprintf(&w.out, "        return (%s, (self.%s,))\n", c.name, c.key)
+		fmt.Fprintf(&w.out, "\n    @staticmethod\n    def release(%s: int) -> None:\n", c.key)
+		writePythonDocstring(&w.out, "        ", fmt.Sprintf("release forgets the %s for %s, so the next %s(%s) makes a new one.", c.name, c.key, c.name, c.key))
+		fmt.Fprintf(&w.out, "        %s.pop(%s, None)\n", table, c.key)
+	}
 	for _, call := range w.calls {
 		if call.class == c {
 			w.out.WriteString("\n")
 			w.writeCall(call, "    ")
 		}
+	}
+	if methods := w.methods[c.name]; methods != "" {
+		w.out.WriteString("\n" + methods)
 	}
 	w.out.WriteString("\n\n")
 }
@@ -297,8 +390,17 @@ func (w *pythonWriter) writeCall(c *call, indent string) {
 		fmt.Fprintf(&w.out, "%s    return %s) is not None\n", indent, send)
 		return
 	}
+
+	// Call the method and return the failure value when it fails.
 	fmt.Fprintf(&w.out, "%s    response = %s, %q)\n", indent, send, c.method.response.name)
 	fmt.Fprintf(&w.out, "%s    if response is None:\n%s        return %s\n", indent, indent, failure)
+
+	// A response the library also hands a mod, such as ServiceReply, decodes
+	// to its dataclass; the others decode to dicts.
+	if w.hasClass(c.method.response) {
+		fmt.Fprintf(&w.out, "%s    return response.%s\n", indent, pythonName(c.result.name))
+		return
+	}
 	fmt.Fprintf(&w.out, "%s    return response[%q]\n", indent, pythonName(c.result.name))
 }
 
@@ -318,6 +420,9 @@ func (w *pythonWriter) writeSchema() error {
 	for _, m := range w.s.mod.methods {
 		r.add(m.request)
 		r.add(m.response)
+	}
+	for _, m := range w.library.messages {
+		r.add(m)
 	}
 	w.out.WriteString("# _SCHEMA describes every message the library encodes or decodes.\n")
 	w.out.WriteString("_SCHEMA: wire.Schema = {\n")
@@ -353,11 +458,16 @@ func (w *pythonWriter) writeSchema() error {
 // descriptor returns the arguments of f's descriptor.
 func (w *pythonWriter) descriptor(f *field) (string, error) {
 	kind, ok := luauKinds[f.kind]
+	if f.kind == descriptorpb.FieldDescriptorProto_TYPE_FIXED64 {
+		kind, ok = "fixed64", true
+	}
 	if !ok {
 		return "", fmt.Errorf("the Python codec has no %s for %s", f.kind, f.name)
 	}
 	args := []string{fmt.Sprintf("%d", f.number), fmt.Sprintf("%q", pythonName(f.name)), fmt.Sprintf("%q", kind)}
 	switch {
+	case f.isMap():
+		args = append(args, "repeated=True", "map=True")
 	case f.repeated:
 		args = append(args, "repeated=True")
 	case f.optional || w.absent[f] || f.oneof != nil && f.oneof.keyed:
@@ -377,6 +487,9 @@ func (w *pythonWriter) descriptor(f *field) (string, error) {
 	}
 	if c := classOf(f); c != nil {
 		args = append(args, "cls="+c.name, fmt.Sprintf("key=%q", c.key))
+	}
+	if f.hero {
+		args = append(args, "resolve=_hero_name")
 	}
 	return strings.Join(args, ", "), nil
 }

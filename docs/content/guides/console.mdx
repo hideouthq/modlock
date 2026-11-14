@@ -1,0 +1,112 @@
+---
+title: Console
+description: Set console variables and run commands, within limits.
+---
+
+The `modlock/console` module sets the game's console variables and runs its
+console commands. The setter for each variable takes the type the game declares
+for it.
+
+<Samples>
+
+```ts
+import { run, set } from 'modlock/console'
+
+set('citadel_allow_purchasing_anywhere', true)
+set('citadel_trooper_gold_reward', 40)
+run('changelevel', 'street_test')
+```
+
+```luau
+local console = require("@modlock/console")
+
+console.setBoolean("citadel_allow_purchasing_anywhere", true)
+console.setNumber("citadel_trooper_gold_reward", 40)
+console.run("changelevel", "street_test")
+```
+
+```python
+from modlock import console
+
+console.set_boolean("citadel_allow_purchasing_anywhere", True)
+console.set_number("citadel_trooper_gold_reward", 40)
+console.run("changelevel", "street_test")
+```
+
+```go
+import "github.com/paralin/modlock/mod/console"
+
+_ = console.CitadelAllowPurchasingAnywhere.Set(true)
+_ = console.CitadelTrooperGoldReward.Set(40)
+_ = console.Changelevel.Run("street_test")
+```
+
+</Samples>
+
+Every call runs one console line through `serverCommand`, which can also set a
+development-only or cheat-protected variable. A value reaches players only for
+a replicated variable the game puts back when they leave, such as
+`citadel_koth_enabled`. Others, such as `citadel_start_players_on_zipline`,
+stay on the server. A variable whose value is a vector or a color has no typed
+setter, so set it with `serverCommand` yourself.
+
+## Set up a mode
+
+`apply(settings)` sets several variables in order and returns the names the
+server refused. For a custom mode, start from `arena`, which empties the map.
+The server keeps running with no one connected, and no troopers, neutrals,
+practice bots or zipline starts appear. Spread it and add your mode's own
+settings:
+
+<Samples>
+
+```ts
+import { apply, arena } from 'modlock/console'
+
+apply({ ...arena, citadel_allow_duplicate_heroes: true })
+```
+
+```luau
+local console = require("@modlock/console")
+
+-- When two tables set the same variable, the later table's value wins.
+console.apply(console.arena, { citadel_allow_duplicate_heroes = true })
+```
+
+```python
+from modlock import console
+
+console.apply({**console.ARENA, "citadel_allow_duplicate_heroes": True})
+```
+
+```go
+import "github.com/paralin/modlock/mod/console"
+
+// Arena returns its settings as a slice, and To makes a setting of your own.
+console.Apply(append(console.Arena(), console.CitadelAllowDuplicateHeroes.To(true))...)
+```
+
+</Samples>
+
+## Limits
+
+Your mod's console lines can change the game, but nothing outside it. They may
+set the game's rules and bots, change or reload the map, kick a player, quit and
+set the time scale. They may also start the game's own recording with
+`tv_enable` and `tv_record <name>`, where the name contains only letters,
+digits, `-` and `_`. They may not reach:
+
+| Area                      | Refused                                                                                                                                                |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Files                     | `exec` and its kin, saves, demo playback, config and path variables, and file-writing commands such as `condump` or `writeip`                          |
+| Logging                   | `log`, `log_*`, `con_log*`, `sv_log*`, and console redirection                                                                                         |
+| The network               | `connect`, `rcon*`, addresses and ports, IP bans, passwords, Steam account and group settings, and broadcast, relay and playcast `tv_*` settings       |
+| The process               | Crash and minidump commands, debuggers, tools, and shutdown                                                                                            |
+| Lines stored to run later | `alias`, `cmd`, `bind*`, `unbind*`, `execute_command_every_frame`, and the test script's `test_*` commands, which run the commands they take           |
+| Entities                  | `ent_create`, `ent_fire*`, `ent_call`, `firetarget`, and `give` for a class [`createEntity` refuses](/guides/entities#create-entities-and-send-inputs) |
+| The script VM             | `script_*`                                                                                                                                             |
+
+`toggle`, `incrementvar` and `multvar` set the variable they take, so the server
+refuses each of them for a variable your mod may not set directly. The server
+checks every command in a line, after each `;` or newline. When it refuses one,
+the error gives the first command it refused.

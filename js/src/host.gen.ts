@@ -18,6 +18,7 @@ import * as playersPb from '../../src/wasm/players/players.pb.js'
 import * as settingsPb from '../../src/wasm/settings/settings.pb.js'
 import * as uiPb from '../../src/wasm/ui/ui.pb.js'
 import * as wasmPb from '../../src/wasm/wasm.pb.js'
+import { heroNamed } from './heroes.js'
 import { call } from './host.js'
 
 /** Vector is a position or direction in the world, in game units. */
@@ -46,6 +47,15 @@ function vector(value: { x?: number; y?: number; z?: number } | undefined): Vect
  */
 function int32(value: number): number {
   return Math.trunc(Math.min(Math.max(value, -0x80000000), 0x7fffffff))
+}
+
+/**
+ * heroName returns the game's name for the hero name names, as heroNamed
+ * finds it, or name itself when it names no released hero, so the host's
+ * error still reports it.
+ */
+function heroName(name: string): string {
+  return heroNamed(name)?.name ?? name
 }
 
 /** angles reads wire angles, taking absent components as zero. */
@@ -598,6 +608,18 @@ export interface AbilityOptions {
    * are not removed; set them with charges.
    */
   maxCharges?: number
+  /**
+   * cooldown makes every cooldown the ability starts from now on last this
+   * many seconds, in place of the game's own length. An ability that holds
+   * charges waits this long between casts. 0 leaves the ability always
+   * ready, and a negative value returns it to the game's own. The game asks
+   * for the length as it starts each cooldown and applies the hero's cooldown
+   * reduction to it, so it holds for every later cast and the hero's screen
+   * shows it; a cooldown already running keeps its end, which cooldown_end
+   * moves. It holds for this ability of this hero until the mod stops, so
+   * set it again after a hero change or a replaced ability.
+   */
+  cooldown?: number
 }
 
 /** toAbilityOptions encodes an AbilityOptions. */
@@ -609,6 +631,62 @@ function toAbilityOptions(value: AbilityOptions): abilitiesPb.AbilityOptions {
     cooldownEnd: value.cooldownEnd,
     rechargeEnd: value.rechargeEnd,
     maxCharges: value.maxCharges === undefined ? undefined : int32(value.maxCharges),
+    cooldown: value.cooldown,
+  }
+}
+
+/** Modifier is one modifier an entity holds, as the game keeps it. */
+export interface Modifier {
+  /**
+   * name is the modifier's name, such as modifier_citadel_knockdown, as
+   * GiveModifier and ReadModifierField name it. It is empty when the game
+   * keeps no readable name.
+   */
+  readonly name: string
+  /**
+   * className is the modifier's server class, such as
+   * CCitadel_Modifier_Knockdown, which ReadModifierField takes. Several
+   * names can share a class.
+   */
+  readonly className: string
+  /**
+   * caster is the handle of the entity that applied it, such as the hero
+   * whose ability did, or 0 when none did.
+   */
+  readonly caster: number
+  /**
+   * ability is the handle of the ability that applied it, or 0 when none did.
+   */
+  readonly ability: number
+  /** age is how many seconds ago the game created it. */
+  readonly age: number
+  /**
+   * remaining is how many seconds it has left since it was last applied. It
+   * is absent for a modifier that lasts until something removes it.
+   */
+  readonly remaining?: number
+  /** stacks and maxStacks count its stacks, for a modifier that stacks. */
+  readonly stacks: number
+  readonly maxStacks: number
+  /** team is the team number it belongs to. */
+  readonly team: number
+  /** disabled is true while the game keeps it without its effects. */
+  readonly disabled: boolean
+}
+
+/** fromModifier decodes a Modifier. */
+function fromModifier(message: abilitiesPb.Modifier): Modifier {
+  return {
+    name: message.name ?? '',
+    className: message.className ?? '',
+    caster: message.caster ?? 0,
+    ability: message.ability ?? 0,
+    age: message.age ?? 0,
+    remaining: message.remaining,
+    stacks: message.stacks ?? 0,
+    maxStacks: message.maxStacks ?? 0,
+    team: message.team ?? 0,
+    disabled: message.disabled ?? false,
   }
 }
 
@@ -647,6 +725,44 @@ function fromBuildItem(message: abilitiesPb.BuildItem): BuildItem {
   return {
     item: message.item ?? '',
     annotation: message.annotation ?? '',
+  }
+}
+
+/**
+ * AbilityCastEvent reports one ability the game executed: the moment the
+ * cast takes effect, after any cast time, for a hero's abilities and the
+ * items a player activates.
+ */
+export interface AbilityCastEvent {
+  /** caster is the entity that cast it, a hero for a player's cast. */
+  readonly caster: number
+  /** player is the slot of the player whose hero cast it, or -1. */
+  readonly player: Player
+  /** ability is the ability's entity handle, as ability.entity reports it. */
+  readonly ability: number
+  /**
+   * name is the ability's name, such as citadel_ability_hornet_snipe, when
+   * a player's hero cast it.
+   */
+  readonly name: string
+  /**
+   * slot is the ability's place on the hero, as ability.slot reports it, or
+   * -1 when the caster is not a player's hero.
+   */
+  readonly slot: number
+  /** target is the entity the cast was aimed at, or zero without one. */
+  readonly target: number
+}
+
+/** fromAbilityCastEvent decodes an AbilityCastEvent. */
+function fromAbilityCastEvent(message: abilitiesPb.AbilityCastEvent): AbilityCastEvent {
+  return {
+    caster: message.caster ?? 0,
+    player: Player.of(message.player ?? 0),
+    ability: message.ability ?? 0,
+    name: message.name ?? '',
+    slot: message.slot ?? 0,
+    target: message.target ?? 0,
   }
 }
 
@@ -729,6 +845,39 @@ function fromDamagedEvent(message: combatPb.DamagedEvent): DamagedEvent {
     healthLost: message.healthLost ?? 0,
     healthBefore: message.healthBefore ?? 0,
     dealt: message.dealt ?? 0,
+  }
+}
+
+/** KillEvent reports one hero or unit that a hit killed. */
+export interface KillEvent {
+  /** victim is the entity that died. */
+  readonly victim: number
+  /**
+   * victimPlayer is the slot of the player whose hero died, or -1 for a unit.
+   */
+  readonly victimPlayer: Player
+  /**
+   * attacker is the entity credited with the killing hit, or zero for a
+   * hazard.
+   */
+  readonly attacker: number
+  /**
+   * attackerPlayer is the slot of the player whose hero is the attacker, or
+   * -1. It is the victim's own slot when a hero killed itself.
+   */
+  readonly attackerPlayer: Player
+  /** ability is the ability that dealt the killing hit, or zero. */
+  readonly ability: number
+}
+
+/** fromKillEvent decodes a KillEvent. */
+function fromKillEvent(message: combatPb.KillEvent): KillEvent {
+  return {
+    victim: message.victim ?? 0,
+    victimPlayer: Player.of(message.victimPlayer ?? 0),
+    attacker: message.attacker ?? 0,
+    attackerPlayer: Player.of(message.attackerPlayer ?? 0),
+    ability: message.ability ?? 0,
   }
 }
 
@@ -927,6 +1076,154 @@ function fromTraceHit(message: combatPb.TraceHit): TraceHit {
     normal: vector(message.normal),
     startSolid: message.startSolid ?? false,
     entity: message.entity ?? 0,
+  }
+}
+
+/**
+ * ModifierFiredEvent reports one of the game's modifier events the mod
+ * watches, with the entities the game fired it with. Which of them an event
+ * fills depends on the event.
+ */
+export interface ModifierFiredEvent {
+  /** name is the event as the mod named it in StartResult.modifier_events. */
+  readonly name: string
+  /**
+   * caster is the entity the event is about, such as the hero that parried
+   * or respawned, or zero.
+   */
+  readonly caster: number
+  /** player is the slot of the player whose hero the caster is, or -1. */
+  readonly player: Player
+  /**
+   * target is the other entity of the event, such as the victim of a kill,
+   * or zero.
+   */
+  readonly target: number
+  /**
+   * ability is the ability or other entity the event names as its source, or
+   * zero.
+   */
+  readonly ability: number
+}
+
+/** fromModifierFiredEvent decodes a ModifierFiredEvent. */
+function fromModifierFiredEvent(message: combatPb.ModifierFiredEvent): ModifierFiredEvent {
+  return {
+    name: message.name ?? '',
+    caster: message.caster ?? 0,
+    player: Player.of(message.player ?? 0),
+    target: message.target ?? 0,
+    ability: message.ability ?? 0,
+  }
+}
+
+/**
+ * HealEvent reports health an ability, item or lifesteal restored at once to
+ * a hero or unit. Regeneration reports none, including what abilities such as
+ * Siphon Life restore as regeneration, and neither do Modlock's own heal and
+ * a heal at full health.
+ */
+export interface HealEvent {
+  /** target is the entity healed. */
+  readonly target: number
+  /**
+   * targetPlayer is the slot of the player whose hero was healed, or -1 for
+   * a unit.
+   */
+  readonly targetPlayer: Player
+  /**
+   * healer is the entity the heal came from, or zero when the game names
+   * none.
+   */
+  readonly healer: number
+  /**
+   * healerPlayer is the slot of the player whose hero the healer is, or -1.
+   */
+  readonly healerPlayer: Player
+  /** ability is the ability or item that healed, or zero. */
+  readonly ability: number
+  /** applied is the health the heal restored. */
+  readonly applied: number
+  /**
+   * requested is the heal's whole amount; it exceeds applied when the target
+   * reached full health.
+   */
+  readonly requested: number
+}
+
+/** fromHealEvent decodes a HealEvent. */
+function fromHealEvent(message: combatPb.HealEvent): HealEvent {
+  return {
+    target: message.target ?? 0,
+    targetPlayer: Player.of(message.targetPlayer ?? 0),
+    healer: message.healer ?? 0,
+    healerPlayer: Player.of(message.healerPlayer ?? 0),
+    ability: message.ability ?? 0,
+    applied: message.applied ?? 0,
+    requested: message.requested ?? 0,
+  }
+}
+
+/** LevelEvent reports a hero reaching a new level. */
+export interface LevelEvent {
+  /** hero is the hero's entity. */
+  readonly hero: number
+  /** player is the slot of the player whose hero it is, or -1. */
+  readonly player: Player
+  /** level is the hero's new level. */
+  readonly level: number
+}
+
+/** fromLevelEvent decodes a LevelEvent. */
+function fromLevelEvent(message: combatPb.LevelEvent): LevelEvent {
+  return {
+    hero: message.hero ?? 0,
+    player: Player.of(message.player ?? 0),
+    level: message.level ?? 0,
+  }
+}
+
+/** MeleeEvent reports one melee swing as the game resolves it. */
+export interface MeleeEvent {
+  /** attacker is the hero or unit that swung. */
+  readonly attacker: number
+  /** attackerPlayer is the slot of the player whose hero swung, or -1. */
+  readonly attackerPlayer: Player
+  /** heavy is true for a charged swing and false for a light one. */
+  readonly heavy: boolean
+  /** hits are the entities the swing struck, empty for a miss. */
+  readonly hits: number[]
+}
+
+/** fromMeleeEvent decodes a MeleeEvent. */
+function fromMeleeEvent(message: combatPb.MeleeEvent): MeleeEvent {
+  return {
+    attacker: message.attacker ?? 0,
+    attackerPlayer: Player.of(message.attackerPlayer ?? 0),
+    heavy: message.heavy ?? false,
+    hits: message.hits ?? [],
+  }
+}
+
+/** ParryEvent reports a parry that caught a melee swing. */
+export interface ParryEvent {
+  /** parrier is the hero that parried. */
+  readonly parrier: number
+  /** player is the slot of the player whose hero parried, or -1. */
+  readonly player: Player
+  /** attacker is the hero or unit whose swing was caught. */
+  readonly attacker: number
+  /** attackerPlayer is the slot of the player whose hero swung, or -1. */
+  readonly attackerPlayer: Player
+}
+
+/** fromParryEvent decodes a ParryEvent. */
+function fromParryEvent(message: combatPb.ParryEvent): ParryEvent {
+  return {
+    parrier: message.parrier ?? 0,
+    player: Player.of(message.player ?? 0),
+    attacker: message.attacker ?? 0,
+    attackerPlayer: Player.of(message.attackerPlayer ?? 0),
   }
 }
 
@@ -1209,7 +1506,10 @@ function fromSettingChangedEvent(message: settingsPb.SettingChangedEvent): Setti
   }
 }
 
-/** DefinitionFieldOptions reads a direct float from a modifier definition. */
+/**
+ * DefinitionFieldOptions names a float field of a definition entry by the
+ * same file, entry and path a Definition's fields use.
+ */
 export interface DefinitionFieldOptions {
   file: Definition_File
   entry: string
@@ -2341,7 +2641,7 @@ function toBotOptions(value: BotOptions): playersPb.BotOptions {
   return {
     name: value.name,
     team: int32(value.team),
-    hero: value.hero === undefined ? undefined : typeof value.hero === 'string' ? { case: 'heroName' as const, value: (value.hero as string) } : typeof value.hero === 'number' ? { case: 'heroId' as const, value: (value.hero as number) } : undefined,
+    hero: value.hero === undefined ? undefined : typeof value.hero === 'string' ? { case: 'heroName' as const, value: heroName((value.hero as string)) } : typeof value.hero === 'number' ? { case: 'heroId' as const, value: (value.hero as number) } : undefined,
     position: value.position,
   }
 }
@@ -2446,6 +2746,51 @@ export interface StartResult {
    * and a PlayerLeft event as each leaves.
    */
   joins: boolean
+  /**
+   * casts asks for an AbilityCast event after each ability the game
+   * executes.
+   */
+  casts: boolean
+  /**
+   * modifierEvents asks for a ModifierFired event for each of the game's
+   * modifier events with these EModifierEvent names, such as
+   * MODIFIER_EVENT_ABILITY_CAST_STARTED or, without the prefix,
+   * ABILITY_CAST_STARTED. A name the running game lacks is logged and never
+   * fires.
+   */
+  modifierEvents?: readonly string[]
+  /**
+   * kills asks for a Killed event after each hit that kills a hero or unit.
+   */
+  kills: boolean
+  /** heals asks for a Healed event after each heal. */
+  heals: boolean
+  /** levels asks for a LevelChanged event as each hero reaches a new level. */
+  levels: boolean
+  /** melees asks for a Melee event after each melee swing. */
+  melees: boolean
+  /**
+   * parries asks for a Parried event after each parry that catches a swing.
+   */
+  parries: boolean
+}
+
+/** toStartResult encodes a StartResult. */
+function toStartResult(value: StartResult): wasmPb.StartResult {
+  return {
+    frames: value.frames,
+    damage: value.damage,
+    damaged: value.damaged,
+    chat: value.chat,
+    joins: value.joins,
+    casts: value.casts,
+    modifierEvents: value.modifierEvents?.slice(),
+    kills: value.kills,
+    heals: value.heals,
+    levels: value.levels,
+    melees: value.melees,
+    parries: value.parries,
+  }
 }
 
 /** FrameEvent identifies one server frame. */
@@ -2594,7 +2939,7 @@ export interface PrecacheOptions {
 /** toPrecacheOptions encodes a PrecacheOptions. */
 function toPrecacheOptions(value: PrecacheOptions): wasmPb.PrecacheOptions {
   return {
-    heroes: value.heroes?.slice(),
+    heroes: value.heroes?.map((v) => heroName(v)),
     resources: value.resources?.slice(),
   }
 }
@@ -2718,7 +3063,7 @@ export class Player {
    * gap, up to 5 seconds, fails and leaves the pick to land.
    */
   selectHero(hero: string | number, team: number): number | undefined {
-    const reply = call('SelectHero', playersPb.SelectHeroRequest.toBinary({ player: this.slot, hero: typeof hero === 'string' ? { case: 'heroName' as const, value: (hero as string) } : typeof hero === 'number' ? { case: 'heroId' as const, value: (hero as number) } : undefined, team: int32(team) }))
+    const reply = call('SelectHero', playersPb.SelectHeroRequest.toBinary({ player: this.slot, hero: typeof hero === 'string' ? { case: 'heroName' as const, value: heroName((hero as string)) } : typeof hero === 'number' ? { case: 'heroId' as const, value: (hero as number) } : undefined, team: int32(team) }))
     if (reply === undefined) return undefined
     const response = playersPb.HeroResponse.fromBinary(reply)
     return response.hero ?? 0
@@ -3284,8 +3629,9 @@ export class Pickup {
 }
 
 /**
- * readDefinitionField verifies a modifier definition's currently applied
- * float value. Unsupported hosts return no value.
+ * readDefinitionField reads the applied value of a definition's float
+ * field, such as one the manifest's definitions changed. Unsupported hosts
+ * return no value.
  */
 export function readDefinitionField(options: DefinitionFieldOptions): number | undefined {
   const reply = call('ReadDefinitionField', manifestPb.DefinitionFieldOptions.toBinary(toDefinitionFieldOptions(options)))
@@ -3383,7 +3729,7 @@ export function handedOff(): string | undefined {
  * world.
  */
 export function heroBuild(hero: string): BuildCategory[] {
-  const reply = call('HeroBuild', abilitiesPb.HeroBuildRequest.toBinary({ hero }))
+  const reply = call('HeroBuild', abilitiesPb.HeroBuildRequest.toBinary({ hero: heroName(hero) }))
   if (reply === undefined) return []
   const response = abilitiesPb.HeroBuildResponse.fromBinary(reply)
   return (response.categories ?? []).map((v) => fromBuildCategory(v))
@@ -3516,6 +3862,19 @@ export function modifierState(entity: number, state: string): boolean {
   if (reply === undefined) return false
   const response = abilitiesPb.ActiveResponse.fromBinary(reply)
   return response.active ?? false
+}
+
+/**
+ * modifiers lists every modifier an entity holds, such as the stun a
+ * hero's ultimate keeps on its target, with its name, class, caster,
+ * ability, age, time left and stacks. An entity that holds none answers an
+ * empty list.
+ */
+export function modifiers(entity: number): Modifier[] {
+  const reply = call('Modifiers', entitiesPb.EntityRequest.toBinary({ entity }))
+  if (reply === undefined) return []
+  const response = abilitiesPb.ModifiersResponse.fromBinary(reply)
+  return (response.modifiers ?? []).map((v) => fromModifier(v))
 }
 
 /**
@@ -3910,6 +4269,26 @@ export function watchProjectiles(options: ProjectileOptions): boolean {
   return call('WatchProjectiles', combatPb.ProjectileOptions.toBinary(toProjectileOptions(options))) !== undefined
 }
 
+/**
+ * holdEntityModifier keeps a modifier, named as GiveModifier names it, on a
+ * live entity with no expiry, giving it back whenever the game removes it
+ * while the entity lives. The hold ends with the entity or when active is
+ * false.
+ */
+export function holdEntityModifier(entity: number, modifier: string, active?: boolean): boolean {
+  return call('HoldEntityModifier', abilitiesPb.HoldEntityModifierRequest.toBinary({ entity, modifier, active })) !== undefined
+}
+
+/**
+ * giveEntityModifier gives a live entity, such as Npc.entity or Pawn.entity,
+ * a modifier for seconds. An ability's modifier, named
+ * "<ability>/<modifier>", resolves its parent ability subclass even when the
+ * entity owns no abilities.
+ */
+export function giveEntityModifier(entity: number, modifier: string, seconds: number): boolean {
+  return call('GiveEntityModifier', abilitiesPb.GiveEntityModifierRequest.toBinary({ entity, modifier, seconds })) !== undefined
+}
+
 /** ModHandlers handles the events the game delivers to the mod. */
 export interface ModHandlers {
   /** start begins the mod's active lifetime, once, before any other event. */
@@ -3944,6 +4323,41 @@ export interface ModHandlers {
    * damage reports. Hits arrive before the next frame.
    */
   damaged(event: DamagedEvent): void
+  /**
+   * killed reports one hero or unit a hit killed, while the mod asked for
+   * kills, after the hit's Damaged event and before the next frame.
+   */
+  killed(event: KillEvent): void
+  /**
+   * abilityCast reports one ability the game executed, while the mod asked
+   * for casts, before the next frame.
+   */
+  abilityCast(event: AbilityCastEvent): void
+  /**
+   * modifierFired reports one modifier event the mod watches, before the
+   * next frame.
+   */
+  modifierFired(event: ModifierFiredEvent): void
+  /**
+   * healed reports one heal, while the mod asked for heals, before the next
+   * frame.
+   */
+  healed(event: HealEvent): void
+  /**
+   * levelChanged reports one hero reaching a new level, while the mod asked
+   * for levels, before the next frame.
+   */
+  levelChanged(event: LevelEvent): void
+  /**
+   * melee reports one melee swing, while the mod asked for melees, before the
+   * next frame.
+   */
+  melee(event: MeleeEvent): void
+  /**
+   * parried reports one parry that caught a swing, while the mod asked for
+   * parries, before the next frame.
+   */
+  parried(event: ParryEvent): void
   /**
    * input reports one player's presses of watched buttons, before the next
    * frame. A block in place still withholds them from the hero.
@@ -4006,7 +4420,7 @@ export function serveMod(handlers: ModHandlers, bytes: Uint8Array): Uint8Array {
   try {
     switch (request.method) {
       case 'Start':
-        return reply(wasmPb.StartResult.toBinary(handlers.start(fromStartEvent(wasmPb.StartEvent.fromBinary(input)))))
+        return reply(wasmPb.StartResult.toBinary(toStartResult(handlers.start(fromStartEvent(wasmPb.StartEvent.fromBinary(input))))))
       case 'Frame':
         handlers.frame(fromFrameEvent(wasmPb.FrameEvent.fromBinary(input)))
         return reply()
@@ -4030,6 +4444,27 @@ export function serveMod(handlers: ModHandlers, bytes: Uint8Array): Uint8Array {
         return reply(combatPb.DamageResult.toBinary(handlers.damage(fromDamageEvent(combatPb.DamageEvent.fromBinary(input)))))
       case 'Damaged':
         handlers.damaged(fromDamagedEvent(combatPb.DamagedEvent.fromBinary(input)))
+        return reply()
+      case 'Killed':
+        handlers.killed(fromKillEvent(combatPb.KillEvent.fromBinary(input)))
+        return reply()
+      case 'AbilityCast':
+        handlers.abilityCast(fromAbilityCastEvent(abilitiesPb.AbilityCastEvent.fromBinary(input)))
+        return reply()
+      case 'ModifierFired':
+        handlers.modifierFired(fromModifierFiredEvent(combatPb.ModifierFiredEvent.fromBinary(input)))
+        return reply()
+      case 'Healed':
+        handlers.healed(fromHealEvent(combatPb.HealEvent.fromBinary(input)))
+        return reply()
+      case 'LevelChanged':
+        handlers.levelChanged(fromLevelEvent(combatPb.LevelEvent.fromBinary(input)))
+        return reply()
+      case 'Melee':
+        handlers.melee(fromMeleeEvent(combatPb.MeleeEvent.fromBinary(input)))
+        return reply()
+      case 'Parried':
+        handlers.parried(fromParryEvent(combatPb.ParryEvent.fromBinary(input)))
         return reply()
       case 'Input':
         handlers.input(fromInputEvent(inputPb.InputEvent.fromBinary(input)))

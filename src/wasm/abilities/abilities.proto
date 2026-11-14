@@ -91,6 +91,17 @@ message AbilityOptions {
   // screen can still show the game's maximum. Charges above the new maximum
   // are not removed; set them with charges.
   optional int32 max_charges = 7;
+
+  // Cooldown makes every cooldown the ability starts from now on last this
+  // many seconds, in place of the game's own length. An ability that holds
+  // charges waits this long between casts. 0 leaves the ability always
+  // ready, and a negative value returns it to the game's own. The game asks
+  // for the length as it starts each cooldown and applies the hero's cooldown
+  // reduction to it, so it holds for every later cast and the hero's screen
+  // shows it; a cooldown already running keeps its end, which cooldown_end
+  // moves. It holds for this ability of this hero until the mod stops, so
+  // set it again after a hero change or a replaced ability.
+  optional float cooldown = 8;
 }
 
 // GiveItemRequest gives one player's hero an item.
@@ -186,6 +197,48 @@ message ActiveResponse {
   bool active = 1;
 }
 
+// ModifiersResponse lists the modifiers an entity holds, in the game's order.
+message ModifiersResponse {
+  repeated Modifier modifiers = 1;
+}
+
+// Modifier is one modifier an entity holds, as the game keeps it.
+message Modifier {
+  // Name is the modifier's name, such as modifier_citadel_knockdown, as
+  // GiveModifier and ReadModifierField name it. It is empty when the game
+  // keeps no readable name.
+  string name = 1;
+
+  // ClassName is the modifier's server class, such as
+  // CCitadel_Modifier_Knockdown, which ReadModifierField takes. Several
+  // names can share a class.
+  string class_name = 2;
+
+  // Caster is the handle of the entity that applied it, such as the hero
+  // whose ability did, or 0 when none did.
+  uint32 caster = 3;
+
+  // Ability is the handle of the ability that applied it, or 0 when none did.
+  uint32 ability = 4;
+
+  // Age is how many seconds ago the game created it.
+  float age = 5;
+
+  // Remaining is how many seconds it has left since it was last applied. It
+  // is absent for a modifier that lasts until something removes it.
+  optional float remaining = 6;
+
+  // Stacks and MaxStacks count its stacks, for a modifier that stacks.
+  int32 stacks = 7;
+  int32 max_stacks = 8;
+
+  // Team is the team number it belongs to.
+  uint32 team = 9;
+
+  // Disabled is true while the game keeps it without its effects.
+  bool disabled = 10;
+}
+
 // HoldModifierStateRequest holds one modifier state on an entity, or
 // releases it.
 message HoldModifierStateRequest {
@@ -233,4 +286,55 @@ message BuildItem {
 
   // Annotation is the author's note on the item.
   string annotation = 2;
+}
+
+// HoldEntityModifierRequest holds or releases a modifier on an entity.
+message HoldEntityModifierRequest {
+  // Entity is the entity handle, such as Npc.entity or Pawn.entity.
+  uint32 entity = 1;
+
+  // Modifier names the modifier as GiveModifierRequest.modifier does, such
+  // as upgrade_colossus/modifier_colossus_active.
+  string modifier = 2;
+
+  // Active holds the modifier when true or omitted; false releases the hold.
+  optional bool active = 3;
+}
+
+// GiveEntityModifierRequest gives a live entity a modifier.
+message GiveEntityModifierRequest {
+  // Entity is the entity handle, such as Npc.entity or Pawn.entity.
+  uint32 entity = 1;
+
+  // Modifier names an ability's modifier as "<ability>/<modifier>", or a
+  // standalone modifier by its name, such as modifier_citadel_idol_glow.
+  string modifier = 2;
+
+  // Seconds is how long the modifier lasts.
+  float seconds = 3;
+}
+
+// AbilityCastEvent reports one ability the game executed: the moment the
+// cast takes effect, after any cast time, for a hero's abilities and the
+// items a player activates.
+message AbilityCastEvent {
+  // Caster is the entity that cast it, a hero for a player's cast.
+  uint32 caster = 1;
+
+  // Player is the slot of the player whose hero cast it, or -1.
+  int32 player = 2;
+
+  // Ability is the ability's entity handle, as Ability.entity reports it.
+  uint32 ability = 3;
+
+  // Name is the ability's name, such as citadel_ability_hornet_snipe, when
+  // a player's hero cast it.
+  string name = 4;
+
+  // Slot is the ability's place on the hero, as Ability.slot reports it, or
+  // -1 when the caster is not a player's hero.
+  int32 slot = 5;
+
+  // Target is the entity the cast was aimed at, or zero without one.
+  uint32 target = 6;
 }

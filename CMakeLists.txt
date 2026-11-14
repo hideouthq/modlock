@@ -118,6 +118,7 @@ add_library(modlock_sdk SHARED
   src/engine_host.cc
   src/plugin_library.cc
   src/gameinterop/ability_charge_limit.cc
+  src/gameinterop/ability_cooldown.cc
   src/gameinterop/ability_definitions.cc
   src/gameinterop/ability_input_hook.cc
   src/gameinterop/ability_modifier.cc
@@ -191,7 +192,6 @@ add_library(modlock_sdk SHARED
   src/wasm/stack_samples.cc
   src/wasm/runtime.cc
   src/wasm/definition_changes.cc
-  src/wasm/modifier_definition.cc
   src/wasm/ability_upgrades.cc
   src/wasm/game.cc
   src/wasm/game_combat.cc
@@ -540,16 +540,15 @@ if(BUILD_TESTING)
   add_executable(ability_definitions_test tests/ability_definitions_test.cc)
   target_link_libraries(ability_definitions_test PRIVATE modlock::sdk gtest_main)
   add_test(NAME ability_definitions_test COMMAND ability_definitions_test)
-  add_executable(modifier_definition_test tests/modifier_definition_test.cc
-    src/wasm/modifier_definition.cc src/wasm/definition_changes.cc src/wasm/ability_upgrades.cc)
-  target_include_directories(modifier_definition_test PRIVATE src)
-  target_link_libraries(modifier_definition_test PRIVATE modlock::sdk gtest_main)
-  add_test(NAME modifier_definition_test COMMAND modifier_definition_test)
   add_executable(ability_upgrades_test tests/ability_upgrades_test.cc
-    src/wasm/ability_upgrades.cc src/wasm/definition_changes.cc src/wasm/modifier_definition.cc)
+    src/wasm/ability_upgrades.cc src/wasm/definition_changes.cc src/wasm/entity_rules.cc)
   target_include_directories(ability_upgrades_test PRIVATE src)
   target_link_libraries(ability_upgrades_test PRIVATE modlock::sdk gtest_main)
   add_test(NAME ability_upgrades_test COMMAND ability_upgrades_test)
+  add_executable(ability_modifier_test tests/ability_modifier_test.cc)
+  target_include_directories(ability_modifier_test PRIVATE src)
+  target_link_libraries(ability_modifier_test PRIVATE modlock::sdk gtest_main)
+  add_test(NAME ability_modifier_test COMMAND ability_modifier_test)
   add_executable(ability_input_hook_test tests/ability_input_hook_test.cc)
   target_link_libraries(ability_input_hook_test PRIVATE modlock::sdk gtest_main)
   add_test(NAME ability_input_hook_test COMMAND ability_input_hook_test)
@@ -713,6 +712,11 @@ if(BUILD_TESTING)
   target_include_directories(wasm_settings_test PRIVATE src)
   target_link_libraries(wasm_settings_test PRIVATE modlock::sdk gtest_main)
   add_test(NAME wasm_settings_test COMMAND wasm_settings_test)
+  add_executable(wasm_definition_text_fields_test tests/wasm_definition_text_fields_test.cc
+    src/wasm/definition_changes.cc src/wasm/ability_upgrades.cc src/wasm/entity_rules.cc)
+  target_include_directories(wasm_definition_text_fields_test PRIVATE src)
+  target_link_libraries(wasm_definition_text_fields_test PRIVATE modlock::sdk gtest_main)
+  add_test(NAME wasm_definition_text_fields_test COMMAND wasm_definition_text_fields_test)
   add_executable(wasm_files_test tests/wasm_files_test.cc src/wasm/files.cc)
   target_include_directories(wasm_files_test PRIVATE src)
   target_link_libraries(wasm_files_test PRIVATE modlock::sdk gtest_main)
@@ -737,6 +741,11 @@ if(BUILD_TESTING)
   target_include_directories(wasm_npc_restore_test PRIVATE src)
   target_link_libraries(wasm_npc_restore_test PRIVATE modlock::sdk gtest_main)
   add_test(NAME wasm_npc_restore_test COMMAND wasm_npc_restore_test)
+  add_executable(wasm_definition_changes_test tests/wasm_definition_changes_test.cc
+    src/wasm/definition_changes.cc src/wasm/ability_upgrades.cc src/wasm/entity_rules.cc)
+  target_include_directories(wasm_definition_changes_test PRIVATE src)
+  target_link_libraries(wasm_definition_changes_test PRIVATE modlock::sdk gtest_main)
+  add_test(NAME wasm_definition_changes_test COMMAND wasm_definition_changes_test)
   add_executable(world_text_game_factory_test tests/world_text_game_factory_test.cc)
   target_link_libraries(world_text_game_factory_test PRIVATE modlock::sdk gtest_main)
   add_test(NAME world_text_game_factory_test COMMAND world_text_game_factory_test)

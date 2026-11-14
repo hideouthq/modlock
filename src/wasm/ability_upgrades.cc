@@ -135,9 +135,10 @@ std::expected<void, std::string> ValidateAbilityUpgrades(const Definition& chang
   if (change.file() != Definition::FILE_ABILITIES) {
     return std::unexpected("upgrades require FILE_ABILITIES");
   }
-  if (!change.properties().empty() || !change.fields().empty() || !change.copy_fields().empty()) {
+  if (!change.properties().empty() || !change.fields().empty() || !change.copy_fields().empty() ||
+      !change.text_fields().empty()) {
     return std::unexpected(
-        "upgrades require a separate definition entry from properties, fields and copies");
+        "upgrades require a separate definition entry from properties, fields, copies and text");
   }
   std::set<uint32_t> order;
   for (const auto tier : change.upgrade_order()) {

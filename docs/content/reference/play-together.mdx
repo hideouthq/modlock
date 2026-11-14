@@ -1,0 +1,42 @@
+---
+title: Playing together
+description: Play a mod you are building with friends on their own PCs.
+---
+
+A friends lobby is a server on your PC that runs your mod and that your
+friends join from their own PCs. On your PC, open one:
+
+```sh
+modlock play --lobby
+```
+
+On each other PC, join it with the link the lobby shows:
+
+```sh
+modlock join LINK
+```
+
+Once the player is in the lobby, `join` launches Deadlock and joins your
+server. Each guest downloads the mod's content from your PC before joining. A
+guest sees content you change after that only when they join again.
+
+First sign in on both PCs with `modlock login`, or use the sign-in that
+`modlock publish` saved. Only a creator who may publish mods can open a
+lobby, and only that creator's friends can join it. The PCs connect directly
+over WebRTC, and when a router blocks the direct connection, the traffic goes
+through Hyperline's relay for as long as the lobby is open.
+
+## Join codes
+
+`modlock play --host` prints a join code instead of opening a lobby, and the
+other PC joins with `modlock join CODE`. Anyone who has the code can join until
+you stop hosting, but only over a direct connection between the PCs. When `--lobby` cannot open a lobby, it says why and
+gives a join code instead. In the sandbox, nothing is hosted and you play on
+your own PC.
+
+## Which mods play
+
+`modlock play` watches one source project, which it rebuilds and reloads each
+time you save, and runs any number of built mods as they are. To play several
+source projects together, pass `--watch=false`: each project then plays from its
+existing build, which is made first if the project has none.

@@ -1,0 +1,81 @@
+---
+title: Abilities and items
+description: Swap, train and upgrade abilities, buy items, and redraw the ability bar.
+---
+
+These calls swap a hero's abilities and buy items for the hero. The game
+applies its own rules and costs to each. The table spells each call as
+TypeScript and Luau do. Python spells them in `snake_case`, and Go capitalizes
+them.
+
+| Call                                   | Effect                                                                                                                                                                                                           |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `replaceAbility(index, name, keep?)`   | Puts an ability in a main slot, 0 to 3, including an ultimate placed on another key. The new ability starts untrained, unless you pass `keep` to give it the old one's training, upgrades, cooldown and charges. |
+| `trainAbility(slot)`                   | Trains or upgrades whatever the hero holds in a main slot, through the game's path. It charges the unlock or the points, and returns false, spending nothing, when the game refuses.                             |
+| `buyItem(item, imbue?, source?)`       | Buys through the game's shop, which applies its rules and charges the souls. Returns false when the shop refuses.                                                                                                |
+| `giveItem(item, imbue?)`               | Gives the hero an item, enabled and free. A hero that already owns it keeps its one copy.                                                                                                                        |
+| `adjustAbilityPoints(points, unlocks)` | Gives or takes ability points and unlocks. The hero's `abilityPoints` and `abilityUnlocks` then show what is left.                                                                                               |
+| `abilityBarPresses(player, handler)`   | Reports each click on a slot's icon or pips as `(player, slot)`.                                                                                                                                                 |
+| `abilityDisplay(viewer, rows)`         | Shows the viewer each row's abilities on the Tab screen and the ability bar, in place of the game's.                                                                                                             |
+| `setAbility`                           | Changes the first ability with a matching name: its upgrades, charges, timers and [cooldown length](#cooldown-length).                                                                                           |
+| `restoreHero`                          | Gives a live hero a saved build, health and cooldowns over a few seconds. Each ability in the target gives its definition ID and slot, so each copy of a repeated ability is trained on its own.                 |
+
+## Swapped abilities
+
+- The same definition can fill several main slots, each a separate ability
+  entity.
+- The game trains and upgrades main slots by slot: a player holds the
+  upgrade key and presses the slot's ability key. Training an untrained
+  replacement costs an ability unlock.
+- A hero change or `resetHero` restores the hero's own abilities, so reapply
+  a swap after either.
+- `imbue` makes the item strengthen whatever ability the hero holds in that
+  slot, including one `replaceAbility` put there. When that ability does not
+  accept the item, the call fails before it spends anything.
+
+## Cooldown length
+
+`setAbility`'s `cooldown` option sets, in seconds, how long every later
+cooldown of the ability lasts, in place of the game's own length. An ability
+that holds charges waits that long between casts. 0 leaves the ability always
+ready, and a negative value returns it to the game's own. A cooldown already
+running keeps its end; `cooldownEnd` moves that one. The length holds for that
+ability of that hero until the mod stops or reloads, so set it again after a
+hero change or a `replaceAbility`.
+
+| Language   | Three-second cooldown                                                          |
+| ---------- | ------------------------------------------------------------------------------ |
+| TypeScript | `player.setAbility({ ability: name, cooldown: 3 })`                            |
+| Luau       | `player:setAbility({ ability = name, cooldown = 3 })`                          |
+| Python     | `player.set_ability(modlock.AbilityOptions(ability=name, cooldown=3))`         |
+| Go         | `p.SetAbility(&mod.AbilityOptions{Ability: name, Cooldown: proto.Float32(3)})` |
+
+Go's `Cooldown` is a `*float32`, so an unset option stays nil; `proto.Float32`
+comes from `google.golang.org/protobuf/proto`.
+
+## Game commands a mod claims
+
+The game's own commands look up the hero's own ability for a slot. A mod that
+swaps abilities claims those commands and answers each with its own call:
+
+| Game command                               | Answer with    |
+| ------------------------------------------ | -------------- |
+| `upgrade_ability`, `trainorupgradeability` | `trainAbility` |
+| `buydependentitem`                         | `buyItem`      |
+
+## The ability bar
+
+The game sends nothing when a player clicks an ability that `replaceAbility`
+gave on the game's ability bar. `abilityBarPresses` reports that click instead,
+and your mod answers it with `trainAbility`. A click the game answers itself,
+with `upgrade_ability`, reaches your mod both ways. Clicks reach your mod only
+while its screen holds the player's HUD. A player who left, or whose session
+ended, sends none.
+
+The Tab screen and ability bar draw each hero's standard abilities by slot,
+so a replaced ability shows as the one it replaced. `abilityDisplay(viewer,
+[{ player, abilities: [{ name, image, upgrades }] }])` draws the rows in the
+game's frame and pips, with the ability window over them. The call also draws
+the viewer's own row on the bar. Modlock matches each row to a Tab row by the
+player's name, or else by the hero's name, which is what a bot's row shows. When
+the viewer leaves or the session ends, the game's own display comes back.

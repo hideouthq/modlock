@@ -647,6 +647,37 @@ std::expected<size_t, std::string> SchemaClassSizeOf(void* schema_system, const 
   return static_cast<size_t>((*info)->size);
 }
 
+std::expected<size_t, std::string> SchemaClassAlignmentOf(void* schema_system,
+                                                          const char* module_name,
+                                                          const char* class_name) {
+  auto info = SchemaClassInfoOf(schema_system, module_name, class_name);
+  if (!info) {
+    return std::unexpected(info.error());
+  }
+  const size_t alignment = (*info)->alignment;
+  if (alignment == 0 || (alignment & (alignment - 1)) != 0) {
+    return std::unexpected("schema class alignment is invalid");
+  }
+  return alignment;
+}
+
+std::expected<size_t, std::string> SchemaEnumSizeOf(void* schema_system, const char* module_name,
+                                                    const char* enum_name) {
+  auto scope = FindTypeScopeOf(schema_system, module_name);
+  if (!scope) {
+    return std::unexpected(scope.error());
+  }
+  auto found = FindDeclaredEnumOf(*scope, enum_name);
+  if (!found) {
+    return std::unexpected(found.error());
+  }
+  const auto* info = static_cast<const schema::EnumInfo*>(*found);
+  if (info->size == 0) {
+    return std::unexpected("schema enum storage size is invalid");
+  }
+  return static_cast<size_t>(info->size);
+}
+
 std::expected<int64_t, std::string> SchemaEnumValueOf(void* schema_system, const char* module_name,
                                                       const char* enum_name,
                                                       const char* value_name) {

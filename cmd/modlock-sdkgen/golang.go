@@ -98,6 +98,11 @@ func writeGo(s *schema) ([]byte, error) {
 
 	// Write the classes and calls.
 	for _, c := range classes {
+		// The library writes an interned class by hand, since its key
+		// carries the connection the mod saw it in.
+		if c.interned {
+			continue
+		}
 		writeComment(&w.out, "", "//", c.doc)
 		fmt.Fprintf(&w.out, "type %s struct {\n", c.name)
 		writeComment(&w.out, "\t", "//", rename(c.keyDoc, c.key, c.goKey))
@@ -213,20 +218,33 @@ func (w *goWriter) writeCall(c *call) error {
 		fail = "return " + failure + ", err"
 	}
 
-	// Build the request, as one expression when it needs no statements.
+	// Build the request, as one expression when it needs no statements. An
+	// options request that names a hero is a copy, whose names the call
+	// resolves without changing the mod's options.
+	var heroes string
+	if c.options {
+		resolved, err := w.resolveHeroes(m)
+		if err != nil {
+			return err
+		}
+		heroes = resolved
+	}
 	request := "request"
 	switch {
 	case m.isEmpty():
 		request = "&" + w.pb(m.file, m.name) + "{}"
-	case c.options && c.receiver == nil:
+	case c.options && c.receiver == nil && heroes == "":
 		request = "options"
 	case c.options:
 		fmt.Fprintf(&w.out, "\trequest := options.CloneVT()\n\tif request == nil {\n\t\trequest = &%s{}\n\t}\n", m.name)
-		fmt.Fprintf(&w.out, "\trequest.%s = %s.%s\n", camel(c.receiver.name), receiverName(c.class), c.class.goKey)
+		if c.receiver != nil {
+			fmt.Fprintf(&w.out, "\trequest.%s = %s\n", camel(c.receiver.name), c.class.goRead(receiverName(c.class)))
+		}
+		w.out.WriteString(heroes)
 	default:
 		var members []string
 		if c.receiver != nil {
-			members = append(members, fmt.Sprintf("%s: %s.%s", camel(c.receiver.name), receiverName(c.class), c.class.goKey))
+			members = append(members, fmt.Sprintf("%s: %s", camel(c.receiver.name), c.class.goRead(receiverName(c.class))))
 		}
 		var later []string
 		for _, p := range c.params {
@@ -247,7 +265,11 @@ func (w *goWriter) writeCall(c *call) error {
 				}
 				later = append(later, indent(encode))
 			case classOf(p.field) != nil:
-				members = append(members, fmt.Sprintf("%s: %s.%s", camel(p.field.name), arg, classOf(p.field).goKey))
+				members = append(members, fmt.Sprintf("%s: %s", camel(p.field.name), classOf(p.field).goRead(arg)))
+			case p.field.hero && (p.field.repeated || p.field.optional):
+				return fmt.Errorf("%s: the Go library resolves only a single hero argument", c.method.name)
+			case p.field.hero:
+				members = append(members, fmt.Sprintf("%s: heroName(%s)", camel(p.field.name), arg))
 			default:
 				members = append(members, fmt.Sprintf("%s: %s", camel(p.field.name), arg))
 			}
@@ -286,11 +308,38 @@ func (w *goWriter) oneofCases(m *message, o *oneof, arg, fail string) string {
 	fmt.Fprintf(&b, "\tswitch %s := %s.(type) {\n", arg, arg)
 	for _, f := range o.fields {
 		types = append(types, w.goBase(f))
-		fmt.Fprintf(&b, "\tcase %s:\n\t\trequest.%s = &%s{%s: %s}\n", w.goBase(f), camel(o.name), w.pb(m.file, m.name+"_"+camel(f.name)), camel(f.name), arg)
+		value := arg
+		if f.hero {
+			value = "heroName(" + arg + ")"
+		}
+		fmt.Fprintf(&b, "\tcase %s:\n\t\trequest.%s = &%s{%s: %s}\n", w.goBase(f), camel(o.name), w.pb(m.file, m.name+"_"+camel(f.name)), camel(f.name), value)
 	}
 	err := fmt.Sprintf("fmt.Errorf(\"%s is a %s, not %%T\", %s)", arg, orList(types), arg)
 	fmt.Fprintf(&b, "\tdefault:\n\t\t%s\n\t}\n", strings.Replace(fail, "err", err, 1))
 	return b.String()
+}
+
+// resolveHeroes returns statements that replace each hero name in request,
+// a copy of an options message m, with the game's name, or nothing when m
+// names no hero.
+func (w *goWriter) resolveHeroes(m *message) (string, error) {
+	var b strings.Builder
+	for _, f := range m.fields {
+		name := camel(f.name)
+		switch {
+		case !f.hero:
+		case f.oneof != nil:
+			fmt.Fprintf(&b, "\tif hero, ok := request.%s.(*%s); ok {\n\t\thero.%s = heroName(hero.%s)\n\t}\n",
+				camel(f.oneof.name), w.pb(m.file, m.name+"_"+name), name, name)
+		case f.repeated:
+			fmt.Fprintf(&b, "\tfor i, hero := range request.%s {\n\t\trequest.%s[i] = heroName(hero)\n\t}\n", name, name)
+		case f.optional:
+			return "", fmt.Errorf("%s.%s: the Go library resolves no optional hero", m.name, f.name)
+		default:
+			fmt.Fprintf(&b, "\trequest.%s = heroName(request.%s)\n", name, name)
+		}
+	}
+	return b.String(), nil
 }
 
 // resultType returns a call's result list and the zero value it returns
@@ -322,8 +371,7 @@ func (w *goWriter) resultType(c *call) (string, string) {
 func (w *goWriter) fromField(f *field, response string) string {
 	switch {
 	case classOf(f) != nil:
-		c := classOf(f)
-		return fmt.Sprintf("%s{%s: %s.Get%s()}", c.name, c.goKey, response, camel(f.name))
+		return classOf(f).goMake(fmt.Sprintf("%s.Get%s()", response, camel(f.name)))
 	case f.message != nil && f.message.isUnion():
 		return fmt.Sprintf("from%s(%s.Get%s())", f.message.name, response, camel(f.name))
 	case f.optional && f.message == nil:
@@ -449,4 +497,20 @@ func indent(code string) string {
 		}
 	}
 	return strings.Join(lines, "")
+}
+
+// goRead returns the expression that reads the key of the value v of class c.
+func (c *class) goRead(v string) string {
+	if c.interned {
+		return v + "." + c.goKey + "()"
+	}
+	return v + "." + c.goKey
+}
+
+// goMake returns the expression that makes the value of class c with key.
+func (c *class) goMake(key string) string {
+	if c.interned {
+		return c.name + "Of(" + key + ")"
+	}
+	return fmt.Sprintf("%s{%s: %s}", c.name, c.goKey, key)
 }

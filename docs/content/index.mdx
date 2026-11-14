@@ -1,0 +1,109 @@
+---
+title: Modlock
+description: Write custom game modes for Deadlock in TypeScript, JavaScript, Luau, Python or Go.
+---
+
+<Hero />
+
+Each language's library has the same events and calls, so you can pick the
+language you know. This mod replies when a player types `/hello` in chat:
+
+<Samples>
+
+```ts
+import { command } from 'modlock'
+
+command('hello', (player) => {
+  player.chat('Hello from TypeScript!')
+})
+```
+
+```luau
+local modlock = require("@modlock")
+
+modlock.command("hello", function(player)
+	player:chat("Hello from Luau!")
+end)
+```
+
+```python
+import modlock
+
+
+@modlock.command("hello")
+def hello(player: modlock.Player, args: str) -> None:
+    player.chat("Hello from Python!")
+```
+
+```go
+package main
+
+import "github.com/paralin/modlock/mod"
+
+func init() {
+	mod.Command("hello", func(p mod.Player, args string) {
+		_ = p.Chat("Hello from Go!")
+	})
+}
+
+func main() {}
+```
+
+</Samples>
+
+<Callout title="Early development">
+  You can write, run and publish mods in TypeScript, JavaScript, Luau, Python
+  and Go today, but the library may still change between releases.
+</Callout>
+
+## Where to go
+
+<Cards>
+  <Card icon={<Download />} title="Install" href="/start/install">
+    Get the `modlock` command.
+  </Card>
+  <Card icon={<Rocket />} title="Your first mod" href="/start/first-mod">
+    Make a project, run it in the game and change it while it runs.
+  </Card>
+  <Card icon={<GraduationCap />} title="Tutorial" href="/start/tutorial">
+    Build a small brawl with a countdown, a score, a HUD and a sign.
+  </Card>
+  <Card icon={<BookOpen />} title="Guides" href="/guides/events">
+    One page for each thing a mod does: players, timers, damage, the world.
+  </Card>
+  <Card icon={<Swords />} title="Mechanics" href="/mechanics/ready-up">
+    Recipes for whole mechanics: a countdown, kill scoring, a hill, a race.
+  </Card>
+  <Card icon={<SquareTerminal />} title="Reference" href="/reference/cli">
+    Every command, every manifest field and how to publish.
+  </Card>
+</Cards>
+
+## Why WebAssembly
+
+<Cards>
+  <Card icon={<ShieldCheck />} title="Safe to share">
+    Each mod runs in a [Wasmtime] sandbox, where it can reach only its own files
+    and never the network. When a mod crashes or hangs, the server stops that
+    mod and the match goes on.
+  </Card>
+  <Card icon={<Languages />} title="Any language">
+    You can write a mod in any language that compiles to WebAssembly.
+  </Card>
+  <Card icon={<Package />} title="Built once">
+    The server looks up each field and input a mod uses by name, so a mod built
+    before a game update still works after it.
+  </Card>
+  <Card icon={<Zap />} title="Fast">
+    The server calls each mod inside the game's own frame, and Wasmtime runs its
+    WebAssembly as machine code.
+  </Card>
+</Cards>
+
+[Wasmtime]: https://wasmtime.dev
+
+## Community
+
+Questions, ideas or a mod to show off? [Join the Discord](https://discord.gg/DCErWrCFvh).
+Modlock is open source under the MIT license, on
+[GitHub](https://github.com/paralin/modlock).

@@ -1,0 +1,315 @@
+---
+title: Toolkit
+description: 'Helpers built on the library: seating, a player roster, free-for-all, vectors, number formats, the floor, race gates and a frame clock.'
+---
+
+The toolkit's helpers are built on the library calls and do the work most modes
+repeat:
+
+| Helper                                | Does                                                                                | Languages  |
+| ------------------------------------- | ----------------------------------------------------------------------------------- | ---------- |
+| [`seat`](#seat-the-players)           | Gives a player a hero on a team, with no team or hero screen.                       | All        |
+| [`setFreeForAll`](#play-free-for-all) | Makes every hero an enemy of every other.                                           | All        |
+| [`Cast`](#keep-the-players-with-cast) | Keeps one member per human, with the hero each wants.                               | All        |
+| [`vector`](#vectors-and-hud-text)     | Places points and turns heroes to face them.                                        | TypeScript |
+| [`format`](#vectors-and-hud-text)     | Writes numbers as a HUD shows them.                                                 | TypeScript |
+| [`ground`](#find-the-floor)           | Finds the floor under a point. `trace`, which it is built on, is in every language. | TypeScript |
+| [`RaceGate`](#stand-a-race-gate)      | Stands a glowing gate across a lane.                                                | TypeScript |
+| [`frameClock`](#time-your-frames)     | Shows which part of the mod spends a slow frame.                                    | TypeScript |
+
+## Seat the players
+
+A seat is the hero and team a player gets without the game's team and hero
+screens. Seat each player from your join handler:
+
+<Samples>
+
+```ts
+import { onPlayerJoin } from 'modlock'
+
+onPlayerJoin(({ connection }) => {
+  connection.player.seat({ hero: 'haze', team: 2 })
+})
+```
+
+```luau
+modlock.onPlayerJoin(function(joined)
+	joined.connection.player:seat({ hero = "haze", team = 2 })
+end)
+```
+
+```python
+@modlock.on_player_join
+def joined(event: modlock.PlayerJoinedEvent) -> None:
+    event.connection.player.seat(hero="haze", team=2)
+```
+
+```go
+mod.OnPlayerJoin(func(joined *mod.PlayerJoinedEvent) {
+	player := mod.PlayerOf(joined.GetConnection().GetPlayer())
+	player.Seat(mod.Seating{Hero: "haze", Team: 2})
+})
+```
+
+</Samples>
+
+| Option | Takes                                                                                                                   |
+| ------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `hero` | A [hero name](/guides/players#heroes), an id, or `any`: the player's own hero, else a random one. `any` is the default. |
+| `team` | 2 or 3. Without one, the player keeps their hero's team or joins the side with fewer heroes.                            |
+
+The hero appears on a later frame. The library asks the game again until the
+player has the seat, and once more after the player changes hero. Seating a
+player again replaces the seat, and the seat ends when they leave. `seat`
+returns false when nobody holds the player's slot. To give players different
+teams, pick the team in the handler.
+
+Seating runs on a [`Cast`](#keep-the-players-with-cast) of the library's own.
+Use a Cast directly when the mod keeps its own state for each player or
+changes what a player wants during the game.
+
+The respawn delay is a separate call and applies to every hero, seated or not.
+A fallen hero keeps its hero and team:
+
+<Samples>
+
+```ts
+import { setRespawnDelay } from 'modlock'
+
+setRespawnDelay(3)
+```
+
+```luau
+modlock.setRespawnDelay(3)
+```
+
+```python
+modlock.set_respawn_delay(3)
+```
+
+```go
+mod.SetRespawnDelay(3 * time.Second)
+```
+
+</Samples>
+
+## Play free-for-all
+
+`setFreeForAll(true)` makes every hero an enemy of every other. New players
+get no hero picker, so seat them from the join handler:
+
+<Samples>
+
+```ts
+import { onPlayerJoin, onStart, setFreeForAll } from 'modlock'
+
+onStart(() => setFreeForAll(true))
+onPlayerJoin(({ connection }) => {
+  connection.player.seat()
+})
+```
+
+```luau
+modlock.onStart(function()
+	modlock.setFreeForAll(true)
+end)
+modlock.onPlayerJoin(function(joined)
+	joined.connection.player:seat()
+end)
+```
+
+```python
+@modlock.on_start
+def start(args: list[str]) -> None:
+    modlock.set_free_for_all(True)
+
+
+@modlock.on_player_join
+def joined(event: modlock.PlayerJoinedEvent) -> None:
+    event.connection.player.seat()
+```
+
+```go
+mod.OnStart(func(args []string) { _ = mod.SetFreeForAll(true) })
+mod.OnPlayerJoin(func(joined *mod.PlayerJoinedEvent) {
+	mod.PlayerOf(joined.GetConnection().GetPlayer()).Seat(mod.Seating{})
+})
+```
+
+</Samples>
+
+| While free-for-all is on |                                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Friendly fire            | Is on for every hero.                                                                                        |
+| Abilities, projectiles   | Treat teammates as enemies.                                                                                  |
+| Teams                    | Players still sit on 2 and 3, and their games draw teammates as allies. Requests to change team are ignored. |
+| New players              | Join the smaller team, with no team screen and no hero picker.                                               |
+| `setFreeForAll(false)`   | Restores the stock teams; players keep the team they are on.                                                 |
+
+`"freeForAll": true` in [`mod.json`](/reference/manifest) starts the mod in
+free-for-all. `setTeamSeating(true)` also seats new players on the smaller team with no team
+screen or hero picker, but leaves friendly fire and team changes as the game has
+them.
+
+## Keep the players with Cast
+
+`Cast` keeps one member per human who finished joining, and gets each the
+hero, team and respawn delay they want. This cast welcomes each player, seats
+them on any hero and brings a fallen hero back after 3 seconds:
+
+<Samples>
+
+```ts
+import { Cast, onFrame } from 'modlock'
+
+const cast = new Cast({
+  join: ({ player, name }) => {
+    player.announce('My Mod', `Welcome, ${name}.`)
+    return { player, kills: 0 }
+  },
+  want: { hero: 'any', respawn: 3 },
+})
+
+onFrame(({ timeSeconds }) => cast.frame(timeSeconds))
+```
+
+```luau
+local cast = modlock.Cast.new({
+	join = function(connection: modlock.Connection)
+		connection.player:announce("My Mod", "Welcome, " .. connection.name .. ".")
+		return { player = connection.player, name = connection.name, kills = 0 }
+	end,
+	want = { hero = "any", respawn = 3 },
+})
+
+modlock.onFrame(function(frame)
+	cast:frame(frame.timeSeconds)
+end)
+```
+
+```python
+def welcome(connection: modlock.Connection) -> modlock.Player:
+    connection.player.announce("My Mod", f"Welcome, {connection.name}.")
+    return connection.player
+
+
+cast = modlock.Cast(welcome, want=modlock.Want(hero="any", respawn=3))
+
+
+@modlock.on_frame
+def frame(event: modlock.FrameEvent) -> None:
+    cast.frame(event.time_seconds)
+```
+
+```go
+// import "time"
+cast := mod.NewCast(mod.CastOptions[mod.Player]{
+	Join: func(connection *mod.Connection) mod.Player {
+		player := mod.PlayerOf(connection.GetPlayer())
+		_ = player.Announce("My Mod", "Welcome, "+connection.GetName()+".")
+		return player
+	},
+	Want: mod.Want{Hero: mod.AnyHero, Respawn: 3 * time.Second},
+})
+
+mod.OnFrame(func(frame *mod.FrameEvent) { cast.Frame(frame.GetTimeSeconds()) })
+```
+
+</Samples>
+
+| Option  | Does                                                                                                                                                                             |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `join`  | Makes a member when a player arrives. A reconnect is a leave and a join, so a member never has the last player's state.                                                          |
+| `leave` | Runs when the member's player leaves.                                                                                                                                            |
+| `bots`  | Makes bots members or kicks them; without it bots are left out.                                                                                                                  |
+| `want`  | A hero, team and respawn delay for everyone, or a function of the member read each frame. Without a team, a member keeps their hero's team or joins the side with fewer members. |
+
+On each frame, Cast reads each member's hero once. At most once a second, it
+asks the game again for the hero, team or respawn delay a member wants but does
+not have yet. Cast learns of joins from the host's player reports, so on a
+frame where nobody joined or left it does not walk the player list.
+Read the hero back from the cast rather than asking the game again:
+
+| TypeScript and Luau | Python      | Go        | Returns                                   |
+| ------------------- | ----------- | --------- | ----------------------------------------- |
+| `size`              | `size`      | `Size`    | How many members there are.               |
+| `members`           | `members()` | `Members` | Every member.                             |
+| `get(player)`       | `get`       | `Get`     | The member for a player, if they are one. |
+| `pawn(player)`      | `pawn`      | `Pawn`    | The member's hero as Cast last read it.   |
+
+## Vectors and HUD text
+
+`vector` works in world units with z up, and view angles in degrees with
+pitch positive looking down.
+
+| Call                                                            | Does                                                 |
+| --------------------------------------------------------------- | ---------------------------------------------------- |
+| `vector.distance`, `flatDistance`, `toward`, `lerp`, arithmetic | Measure and combine points.                          |
+| `yawToward`, `level`, `aimAt`, `forward`                        | Turn a hero to face a point, or read where it looks. |
+
+`format` writes numbers the way players read them, since the game's scripts
+have no locale data:
+
+| Call                          | Result    |
+| ----------------------------- | --------- |
+| `clock(65)`                   | `1:05`    |
+| `stopwatch(64.37)`            | `1:04.37` |
+| `percent(3, 4)`               | `75%`     |
+| `grouped(4210)`               | `4,210`   |
+| `ordinal(2)`                  | `2nd`     |
+| `count(3, 'kill')`            | `3 kills` |
+| `clip('Lady Geist wins', 10)` | `Lady…`   |
+
+## Find the floor
+
+`ground(point)` returns the floor under a point, or nothing when no floor is
+in reach, the point is inside a wall, or the world's collision is not ready
+yet. `ground(spawn) ?? spawn` keeps the point when there is no floor. It
+traces straight down through solid and player clip, from 64 units above to
+1024 below; `above`, `below` and `layers` change the reach.
+
+## Stand a race gate
+
+`RaceGate.stand` stands a checkpoint or finish gate across a lane: thin
+glowing lines inside a racing checker band, Tron cyan by default. `foot` is
+the road point under the middle of the opening and `yaw` the direction a
+runner passes through, in degrees. Precache `raceGateResources` in
+`onStart`:
+
+```ts
+import { ground, onStart, precache, RaceGate, raceGateResources } from 'modlock'
+
+onStart(() => precache({ resources: raceGateResources }))
+
+const gate = RaceGate.stand({ foot: ground(spot) ?? spot, yaw: 90 })
+gate.remove()
+```
+
+| Option            | Default    | Does                                                                                                                                  |
+| ----------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `width`, `height` | 112 by 144 | Size the opening, rounded to whole 8-unit cells.                                                                                      |
+| `color`, `faded`  | Cyan       | Color the band's inner and outer rings. World text and beams ignore alpha, so the outer ring uses a darker shade to look see-through. |
+| `viewer`          | Everyone   | Shows the gate to one player slot only.                                                                                               |
+
+## Time your frames
+
+`frameClock` shows how much of a slow server frame is your mod's, and which
+part spends it. Call `begin` as a frame starts, `lap` with a name after each
+part, and `end` with the frame's tick:
+
+```ts
+import { frameClock, onFrame } from 'modlock'
+
+onFrame((frame) => {
+  frameClock.begin()
+  moveBots()
+  frameClock.lap('bots')
+  drawHud()
+  frameClock.lap('hud')
+  frameClock.end(frame.tick)
+})
+```
+
+Once a minute `frameClock` logs the median and slowest frame, each part's mean and
+slowest milliseconds, and the parts that cost most in the minute's slowest
+frame. That last figure shows a part that spikes only once a minute.

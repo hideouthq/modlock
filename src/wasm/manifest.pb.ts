@@ -421,11 +421,18 @@ export interface Definition {
    */
   properties?: { [key: string]: number }
   /**
-   * Fields writes float schema fields, named as a path of Class.field steps
-   * from the entry's data, such as
-   * CitadelAbilityVData.m_projectileInfo/ProjectileInfo_t.m_flSpeed. A last
-   * step may name one value of an enum-keyed map, such as
-   * CitadelHeroData_t.m_mapStartingStats[EStatsType.EMaxHealth].
+   * Fields writes float schema fields, including CModifierLevelFloat,
+   * CSkillFloat and CRangeFloat, named as a path of Class.field steps from the
+   * entry's data, such as
+   * CitadelAbilityVData.m_projectileInfo/ProjectileInfo_t.m_flSpeed. A step on
+   * a map may select one value by its key, an enum value or a name, and the
+   * next step reads inside it, such as
+   * CitadelHeroData_t.m_mapStartingStats[EStatsType.EMaxHealth] or
+   * CitadelAbilityVData.m_mapWeaponInfos[primary]/CCitadelWeaponInfo.m_flBulletSpeed.
+   * A last step may select one modifier script value, such as
+   * CModifierVData.m_vecScriptValues[EModifierValue.MODIFIER_VALUE_MODEL_SCALE].
+   * One value fills every level of a level float or script value and both
+   * bounds of a range.
    */
   fields?: { [key: string]: number }
   /**
@@ -433,6 +440,12 @@ export interface Definition {
    * key's path; both must be the same size.
    */
   copyFields?: { [key: string]: string }
+  /**
+   * TextFields writes text, symbol, sound event and Panorama image schema
+   * fields, named as a path of Class.field steps from the entry's data. Each
+   * {addon} in a value becomes the mod's content addon.
+   */
+  textFields?: { [key: string]: string }
   /**
    * Upgrades requires FILE_ABILITIES and a separate entry from properties,
    * fields and copy_fields. All requested rows are validated before writing;
@@ -458,8 +471,9 @@ export const Definition: MessageType<Definition> =
       [3, 'properties', 2, 584],
       [4, 'fields', 2, 584],
       [5, 'copy_fields', 9, 584],
-      [6, 'upgrades', 11, 1, Definition_Upgrade.codec],
-      [7, 'upgrade_order', 13, 3],
+      [6, 'text_fields', 9, 584],
+      [100, 'upgrades', 11, 1, Definition_Upgrade.codec],
+      [101, 'upgrade_order', 13, 3],
     ],
     {
       decode: (r: BinaryReader, end: number, m: Definition): Definition => {
@@ -506,12 +520,23 @@ export const Definition: MessageType<Definition> =
               m.copyFields[k] = v
               break
             }
-            case 6:
+            case 6: {
+              const [k, v] = r.entry(
+                (r) => r.string(),
+                (r) => r.string(),
+                '',
+                '',
+              )
+              m.textFields ??= newMap()
+              m.textFields[k] = v
+              break
+            }
+            case 100:
               ;(m.upgrades ??= []).push(
                 Definition_Upgrade.decode(r, r.delimited(), {}),
               )
               break
-            case 7:
+            case 101:
               for (const e = r.run(t), a = (m.upgradeOrder ??= []); r.pos < e;)
                 a.push(r.uint32())
               break
@@ -561,14 +586,24 @@ export const Definition: MessageType<Definition> =
             }
         }
         {
+          const o = m.textFields
+          if (o != null)
+            for (const [k, v] of Object.entries(o)) {
+              const s = w.uint32(50).fork()
+              w.uint32(10).string(k)
+              w.uint32(18).string(v)
+              w.join(s)
+            }
+        }
+        {
           const a = m.upgrades
           if (a != null)
-            for (const e of a) Definition_Upgrade.writeField(w, 6, e)
+            for (const e of a) Definition_Upgrade.writeField(w, 100, e)
         }
         {
           const a = m.upgradeOrder
           if (a != null && a.length > 0) {
-            const s = w.uint32(58).fork()
+            const s = w.uint32(810).fork()
             for (const e of a) w.uint32(e)
             w.join(s)
           }
@@ -607,8 +642,8 @@ export enum Definition_File {
   NPC_UNITS = 3,
 
   /**
-   * FILE_MODIFIERS names embedded modifier definitions by ability/modifier.
-   * Fields must name a direct float of the modifier's exact schema class.
+   * FILE_MODIFIERS is scripts/modifiers.vdata, the standalone modifiers, and
+   * the modifiers embedded in abilities, named as <ability>/<modifier>.
    */
   MODIFIERS = 4,
 }
@@ -696,7 +731,8 @@ export const Definition_Upgrade: MessageType<Definition_Upgrade> =
   )
 
 /**
- * DefinitionFieldOptions reads a direct float from a modifier definition.
+ * DefinitionFieldOptions names a float field of a definition entry by the
+ * same file, entry and path a Definition's fields use.
  *
  * @generated from message modlock.wasm.DefinitionFieldOptions
  */
@@ -757,6 +793,8 @@ export const DefinitionFieldOptions: MessageType<DefinitionFieldOptions> =
   )
 
 /**
+ * DefinitionFieldResponse is the field's first float.
+ *
  * @generated from message modlock.wasm.DefinitionFieldResponse
  */
 export interface DefinitionFieldResponse {

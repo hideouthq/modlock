@@ -96,6 +96,10 @@ class Definition_PropertiesEntry_DoNotUse;
 struct Definition_PropertiesEntry_DoNotUseDefaultTypeInternal;
 MODLOCK_API extern Definition_PropertiesEntry_DoNotUseDefaultTypeInternal _Definition_PropertiesEntry_DoNotUse_default_instance_;
 MODLOCK_API extern const ::google::protobuf::internal::ClassDataFull Definition_PropertiesEntry_DoNotUse_class_data_;
+class Definition_TextFieldsEntry_DoNotUse;
+struct Definition_TextFieldsEntry_DoNotUseDefaultTypeInternal;
+MODLOCK_API extern Definition_TextFieldsEntry_DoNotUseDefaultTypeInternal _Definition_TextFieldsEntry_DoNotUse_default_instance_;
+MODLOCK_API extern const ::google::protobuf::internal::ClassDataFull Definition_TextFieldsEntry_DoNotUse_class_data_;
 class Definition_Upgrade;
 struct Definition_UpgradeDefaultTypeInternal;
 MODLOCK_API extern Definition_UpgradeDefaultTypeInternal _Definition_Upgrade_default_instance_;
@@ -570,7 +574,7 @@ class MODLOCK_API DefinitionFieldResponse final : public ::google::protobuf::Mes
     return *reinterpret_cast<const DefinitionFieldResponse*>(
         &_DefinitionFieldResponse_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 9;
+  static constexpr int kIndexInFileMessages = 10;
   friend void swap(DefinitionFieldResponse& a, DefinitionFieldResponse& b) { a.Swap(&b); }
   inline void Swap(DefinitionFieldResponse* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -760,7 +764,7 @@ class MODLOCK_API DefinitionFieldOptions final : public ::google::protobuf::Mess
     return *reinterpret_cast<const DefinitionFieldOptions*>(
         &_DefinitionFieldOptions_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 8;
+  static constexpr int kIndexInFileMessages = 9;
   friend void swap(DefinitionFieldOptions& a, DefinitionFieldOptions& b) { a.Swap(&b); }
   inline void Swap(DefinitionFieldOptions* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -968,6 +972,45 @@ class Definition_Upgrade_PropertiesEntry_DoNotUse final
 MODLOCK_API extern const ::google::protobuf::internal::ClassDataFull Definition_Upgrade_PropertiesEntry_DoNotUse_class_data_;
 // -------------------------------------------------------------------
 
+class Definition_TextFieldsEntry_DoNotUse final
+    : public ::google::protobuf::internal::MapEntry<::std::string, ::std::string,
+                             ::google::protobuf::internal::WireFormatLite::TYPE_STRING,
+                             ::google::protobuf::internal::WireFormatLite::TYPE_STRING> {
+ public:
+  using SuperType =
+      ::google::protobuf::internal::MapEntry<::std::string, ::std::string,
+                      ::google::protobuf::internal::WireFormatLite::TYPE_STRING,
+                      ::google::protobuf::internal::WireFormatLite::TYPE_STRING>;
+  Definition_TextFieldsEntry_DoNotUse();
+  template <typename = void>
+  explicit PROTOBUF_CONSTEXPR Definition_TextFieldsEntry_DoNotUse(::google::protobuf::internal::ConstantInitialized);
+  explicit Definition_TextFieldsEntry_DoNotUse(::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  static constexpr const void* PROTOBUF_NONNULL internal_default_instance() {
+    return &_Definition_TextFieldsEntry_DoNotUse_default_instance_;
+  }
+
+
+  static constexpr auto InternalGenerateClassData_();
+
+ private:
+  friend class ::google::protobuf::MessageLite;
+  friend struct ::TableStruct_github_2ecom_2fparalin_2fmodlock_2fsrc_2fwasm_2fmanifest_2eproto;
+
+  friend class ::google::protobuf::internal::TcParser;
+  static const ::google::protobuf::internal::TcParseTable<1, 2,
+                                   0, 56,
+                                   2>
+      _table_;
+
+  const ::google::protobuf::internal::ClassData* PROTOBUF_NONNULL GetClassData() const PROTOBUF_FINAL;
+  static void* PROTOBUF_NONNULL PlacementNew_(
+      const void* PROTOBUF_NONNULL, void* PROTOBUF_NONNULL mem,
+      ::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  static constexpr auto InternalNewImpl_();
+};
+MODLOCK_API extern const ::google::protobuf::internal::ClassDataFull Definition_TextFieldsEntry_DoNotUse_class_data_;
+// -------------------------------------------------------------------
+
 class Definition_PropertiesEntry_DoNotUse final
     : public ::google::protobuf::internal::MapEntry<::std::string, float,
                              ::google::protobuf::internal::WireFormatLite::TYPE_STRING,
@@ -1140,7 +1183,7 @@ class MODLOCK_API Definition_Upgrade final : public ::google::protobuf::Message
     return *reinterpret_cast<const Definition_Upgrade*>(
         &_Definition_Upgrade_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 6;
+  static constexpr int kIndexInFileMessages = 7;
   friend void swap(Definition_Upgrade& a, Definition_Upgrade& b) { a.Swap(&b); }
   inline void Swap(Definition_Upgrade* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -1350,7 +1393,7 @@ class MODLOCK_API Definition final : public ::google::protobuf::Message
     return *reinterpret_cast<const Definition*>(
         &_Definition_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 7;
+  static constexpr int kIndexInFileMessages = 8;
   friend void swap(Definition& a, Definition& b) { a.Swap(&b); }
   inline void Swap(Definition* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -1461,15 +1504,16 @@ class MODLOCK_API Definition final : public ::google::protobuf::Message
 
   // accessors -------------------------------------------------------
   enum : int {
-    kUpgradesFieldNumber = 6,
-    kUpgradeOrderFieldNumber = 7,
+    kUpgradesFieldNumber = 100,
+    kUpgradeOrderFieldNumber = 101,
     kEntryFieldNumber = 2,
     kFileFieldNumber = 1,
     kPropertiesFieldNumber = 3,
     kFieldsFieldNumber = 4,
     kCopyFieldsFieldNumber = 5,
+    kTextFieldsFieldNumber = 6,
   };
-  // repeated .modlock.wasm.Definition.Upgrade upgrades = 6;
+  // repeated .modlock.wasm.Definition.Upgrade upgrades = 100;
   int upgrades_size() const;
   private:
   int _internal_upgrades_size() const;
@@ -1486,7 +1530,7 @@ class MODLOCK_API Definition final : public ::google::protobuf::Message
   const ::modlock::wasm::Definition_Upgrade& upgrades(int index) const;
   ::modlock::wasm::Definition_Upgrade* PROTOBUF_NONNULL add_upgrades();
   const ::google::protobuf::RepeatedPtrField<::modlock::wasm::Definition_Upgrade>& upgrades() const;
-  // repeated uint32 upgrade_order = 7;
+  // repeated uint32 upgrade_order = 101;
   int upgrade_order_size() const;
   private:
   int _internal_upgrade_order_size() const;
@@ -1574,13 +1618,28 @@ class MODLOCK_API Definition final : public ::google::protobuf::Message
   ::google::protobuf::Map<::std::string, ::std::string>* PROTOBUF_NONNULL _internal_mutable_copy_fields();
 
   public:
+  // map<string, string> text_fields = 6;
+  int text_fields_size() const;
+  private:
+  int _internal_text_fields_size() const;
+
+  public:
+  void clear_text_fields() ;
+  const ::google::protobuf::Map<::std::string, ::std::string>& text_fields() const;
+  ::google::protobuf::Map<::std::string, ::std::string>* PROTOBUF_NONNULL mutable_text_fields();
+
+  private:
+  const ::google::protobuf::Map<::std::string, ::std::string>& _internal_text_fields() const;
+  ::google::protobuf::Map<::std::string, ::std::string>* PROTOBUF_NONNULL _internal_mutable_text_fields();
+
+  public:
   // @@protoc_insertion_point(class_scope:modlock.wasm.Definition)
  private:
   class _Internal;
   friend class ::google::protobuf::internal::TcParser;
-  static const ::google::protobuf::internal::TcParseTable<3, 7,
-                                   4, 64,
-                                   2>
+  static const ::google::protobuf::internal::TcParseTable<3, 8,
+                                   5, 83,
+                                   7>
       _table_;
 
   friend class ::google::protobuf::MessageLite;
@@ -1617,6 +1676,10 @@ class MODLOCK_API Definition final : public ::google::protobuf::Message
                       ::google::protobuf::internal::WireFormatLite::TYPE_STRING,
                       ::google::protobuf::internal::WireFormatLite::TYPE_STRING>
         copy_fields_;
+    ::google::protobuf::internal::MapField<Definition_TextFieldsEntry_DoNotUse, ::std::string, ::std::string,
+                      ::google::protobuf::internal::WireFormatLite::TYPE_STRING,
+                      ::google::protobuf::internal::WireFormatLite::TYPE_STRING>
+        text_fields_;
     PROTOBUF_TSAN_DECLARE_MEMBER
   };
   union { Impl_ _impl_; };
@@ -2931,6 +2994,8 @@ inline void Movement::_internal_set_scale(float value) {
 
 // -------------------------------------------------------------------
 
+// -------------------------------------------------------------------
+
 // Definition_Upgrade
 
 // uint32 tier = 1;
@@ -3180,7 +3245,39 @@ inline ::google::protobuf::Map<::std::string, ::std::string>* PROTOBUF_NONNULL D
   return _internal_mutable_copy_fields();
 }
 
-// repeated .modlock.wasm.Definition.Upgrade upgrades = 6;
+// map<string, string> text_fields = 6;
+inline int Definition::_internal_text_fields_size() const {
+  return _internal_text_fields().size();
+}
+inline int Definition::text_fields_size() const {
+  return _internal_text_fields_size();
+}
+inline void Definition::clear_text_fields() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.text_fields_.Clear();
+  ClearHasBitForRepeated(_impl_._has_bits_[0],
+                  0x00000080U);
+}
+inline const ::google::protobuf::Map<::std::string, ::std::string>& Definition::_internal_text_fields() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.text_fields_.GetMap();
+}
+inline const ::google::protobuf::Map<::std::string, ::std::string>& Definition::text_fields() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_map:modlock.wasm.Definition.text_fields)
+  return _internal_text_fields();
+}
+inline ::google::protobuf::Map<::std::string, ::std::string>* PROTOBUF_NONNULL Definition::_internal_mutable_text_fields() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.text_fields_.MutableMap();
+}
+inline ::google::protobuf::Map<::std::string, ::std::string>* PROTOBUF_NONNULL Definition::mutable_text_fields()
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  SetHasBitForRepeated(_impl_._has_bits_[0], 0x00000080U);
+  // @@protoc_insertion_point(field_mutable_map:modlock.wasm.Definition.text_fields)
+  return _internal_mutable_text_fields();
+}
+
+// repeated .modlock.wasm.Definition.Upgrade upgrades = 100;
 inline int Definition::_internal_upgrades_size() const {
   return _internal_upgrades().size();
 }
@@ -3236,7 +3333,7 @@ Definition::_internal_mutable_upgrades() {
   return &_impl_.upgrades_;
 }
 
-// repeated uint32 upgrade_order = 7;
+// repeated uint32 upgrade_order = 101;
 inline int Definition::_internal_upgrade_order_size() const {
   return _internal_upgrade_order().size();
 }

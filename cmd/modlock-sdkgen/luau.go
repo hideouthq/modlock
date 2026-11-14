@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/aperturerobotics/protobuf-go-lite/types/descriptorpb"
@@ -61,6 +62,16 @@ local function with(options: any, name: string, value: any): any
 	return request
 end
 
+-- heroNamed is modlock.heroNamed, which the library defines below.
+local heroNamed: (name: string) -> { name: string }?
+
+-- heroName returns the game's name of the hero name names, as heroNamed
+-- matches it, or name itself when it names no released hero.
+local function heroName(name: string): string
+	local hero = heroNamed(name)
+	return if hero then hero.name else name
+end
+
 `
 
 // luauWriter writes the Luau library's module.
@@ -72,6 +83,32 @@ type luauWriter struct {
 	// absent holds the result field of each call that answers nil when the
 	// host leaves it out.
 	absent map[*field]bool
+	// library is the handwritten library, whose class methods join each
+	// class's type.
+	library []byte
+}
+
+// luauMethod matches a method the handwritten library adds to a class, such
+// as function Player.seat(self: Player, options: Seating?): boolean, with the
+// comment lines above it.
+var luauMethod = regexp.MustCompile(`(?m)((?:^--.*\n)*)^function (\w+)\.(\w+)\((self: \w+(?:, .*)?)\)(?:: (.*))?\n`)
+
+// writeMethods writes the type fields of the methods the handwritten library
+// adds to c. The library defines them on the class's table itself.
+func (w *luauWriter) writeMethods(c *class) {
+	for _, m := range luauMethod.FindAllSubmatch(w.library, -1) {
+		if string(m[2]) != c.name {
+			continue
+		}
+		for line := range strings.Lines(string(m[1])) {
+			w.out.WriteString("\t" + line)
+		}
+		result := string(m[5])
+		if result == "" {
+			result = "()"
+		}
+		fmt.Fprintf(&w.out, "\t%s: (%s) -> %s,\n", m[3], m[4], result)
+	}
 }
 
 // writeLuau returns luau/modlock/init.luau, which ends with the handwritten
@@ -85,12 +122,13 @@ func writeLuau(s *schema) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	w := &luauWriter{directions: s.directions(calls), s: s, calls: calls, absent: map[*field]bool{}}
+	w := &luauWriter{directions: s.directions(calls), s: s, calls: calls, absent: map[*field]bool{}, library: library}
 	for _, c := range calls {
 		if f := c.result; f != nil && f.message != nil && !f.repeated && !f.message.isBareUnion() {
 			w.absent[f] = true
 		}
 	}
+	s.serviceAbsent(w.absent)
 	w.out.WriteString(luauPreamble)
 	if err := w.writeTypes(); err != nil {
 		return nil, err
@@ -122,7 +160,7 @@ func (w *luauWriter) writeTypes() error {
 		var names, entries []string
 		for _, v := range e.named() {
 			names = append(names, fmt.Sprintf("%q", e.valueName(v)))
-			entries = append(entries, fmt.Sprintf("\t[%d] = %q,\n\t%s = %d,\n", v.number, e.valueName(v), e.valueName(v), v.number))
+			entries = append(entries, fmt.Sprintf("\t[%d] = %q,\n\t%s = %d,\n", v.number, e.valueName(v), luauKey(e.valueName(v)), v.number))
 		}
 		fmt.Fprintf(&w.out, "export type %s = %s\n", e.name, strings.Join(names, " | "))
 		fmt.Fprintf(&w.out, "local %s: { [any]: any } = {\n%s}\n\n", e.name, strings.Join(entries, ""))
@@ -185,6 +223,30 @@ func (w *luauWriter) oneofType(o *oneof) string {
 	return strings.Join(types, " | ")
 }
 
+// writeNew writes a class's constructor. An interned class keeps one frozen
+// object for each number, so == tells whether two values are the same thing
+// and an object works as a table key.
+func (w *luauWriter) writeNew(c *class) {
+	if !c.interned {
+		fmt.Fprintf(&w.out, "-- new returns the %s with %s.\n", c.name, c.key)
+		fmt.Fprintf(&w.out, "function %s.new(%s: number): %s\n", c.name, c.key, c.name)
+		fmt.Fprintf(&w.out, "\treturn setmetatable({ %s = %s }, %s) :: any\nend\n\n", c.key, c.key, c.name)
+		return
+	}
+	table := lowerCamel(c.name) + "Objects"
+	fmt.Fprintf(&w.out, "-- %s holds the %s of each %s that %s.new made.\n", table, c.name, c.key, c.name)
+	fmt.Fprintf(&w.out, "local %s: { [number]: %s } = {}\n\n", table, c.name)
+	fmt.Fprintf(&w.out, "-- new returns the %s with %s, the same object each time until release\n", c.name, c.key)
+	fmt.Fprintf(&w.out, "-- forgets it, so == tells whether two values are the same %s and a\n", lowerCamel(c.noun))
+	fmt.Fprintf(&w.out, "-- %s works as a table key.\n", c.name)
+	fmt.Fprintf(&w.out, "function %s.new(%s: number): %s\n", c.name, c.key, c.name)
+	fmt.Fprintf(&w.out, "\tlocal object = %s[%s]\n\tif object == nil then\n", table, c.key)
+	fmt.Fprintf(&w.out, "\t\tobject = table.freeze(setmetatable({ %s = %s }, %s)) :: any\n", c.key, c.key, c.name)
+	fmt.Fprintf(&w.out, "\t\t%s[%s] = object\n\tend\n\treturn object\nend\n\n", table, c.key)
+	fmt.Fprintf(&w.out, "-- release forgets the %s for %s, so the next %s.new makes a new one.\n", c.name, c.key, c.name)
+	fmt.Fprintf(&w.out, "function %s.release(%s: number)\n\t%s[%s] = nil\nend\n\n", c.name, c.key, table, c.key)
+}
+
 // writeClass writes one class: its type, which lists its methods, its
 // constructor and its calls as methods.
 func (w *luauWriter) writeClass(c *class) {
@@ -200,11 +262,10 @@ func (w *luauWriter) writeClass(c *class) {
 			fmt.Fprintf(&w.out, "\t%s: (%s) -> %s,\n", call.name, strings.Join(params, ", "), result)
 		}
 	}
+	w.writeMethods(c)
 	w.out.WriteString("}\n")
 	fmt.Fprintf(&w.out, "local %s = {}\n%s.__index = %s\n\n", c.name, c.name, c.name)
-	fmt.Fprintf(&w.out, "-- new returns the %s with %s.\n", c.name, c.key)
-	fmt.Fprintf(&w.out, "function %s.new(%s: number): %s\n", c.name, c.key, c.name)
-	fmt.Fprintf(&w.out, "\treturn setmetatable({ %s = %s }, %s) :: any\nend\n\n", c.key, c.key, c.name)
+	w.writeNew(c)
 	for _, call := range w.calls {
 		if call.class == c {
 			w.writeCall(call)
@@ -294,7 +355,9 @@ func (w *luauWriter) writeCall(c *call) {
 }
 
 // writeSchema writes the descriptor of every message the library encodes or
-// decodes.
+// decodes, which includes the interface tree the Ui call sends and the
+// messages of the services outside Modlock, and the wire names of the enums
+// only those reach.
 func (w *luauWriter) writeSchema() error {
 	var r reach
 	for _, m := range w.s.messageOrder {
@@ -306,9 +369,33 @@ func (w *luauWriter) writeSchema() error {
 		r.add(c.method.request)
 		r.add(c.method.response)
 	}
+	for _, m := range w.s.host.methods {
+		if m.name == "Ui" {
+			r.add(m.request)
+			r.add(m.response)
+		}
+	}
 	for _, m := range w.s.mod.methods {
 		r.add(m.request)
 		r.add(m.response)
+	}
+	for _, m := range w.s.services {
+		r.add(m)
+	}
+	for _, e := range r.enums {
+		if w.enumsIn[e] || w.enumsOut[e] {
+			continue
+		}
+		var entries []string
+		for _, v := range e.named() {
+			entries = append(entries, fmt.Sprintf("\t[%d] = %q,\n\t%s = %d,\n", v.number, e.valueName(v), luauKey(e.valueName(v)), v.number))
+		}
+		what := "interface enum"
+		if e.file.isService() {
+			what = "service enum"
+		}
+		fmt.Fprintf(&w.out, "-- %s holds the wire names of the %s %s.\n", e.name, what, e.name)
+		fmt.Fprintf(&w.out, "local %s: { [any]: any } = {\n%s}\n\n", e.name, strings.Join(entries, ""))
 	}
 	for _, m := range w.s.messageOrder {
 		if !r.seen[m] {
@@ -340,6 +427,7 @@ var luauKinds = map[descriptorpb.FieldDescriptorProto_Type]string{
 	descriptorpb.FieldDescriptorProto_TYPE_UINT64:  "uint64",
 	descriptorpb.FieldDescriptorProto_TYPE_INT32:   "int32",
 	descriptorpb.FieldDescriptorProto_TYPE_FIXED32: "fixed32",
+	descriptorpb.FieldDescriptorProto_TYPE_FIXED64: "fixed64",
 	descriptorpb.FieldDescriptorProto_TYPE_BOOL:    "bool",
 	descriptorpb.FieldDescriptorProto_TYPE_STRING:  "string",
 	descriptorpb.FieldDescriptorProto_TYPE_MESSAGE: "message",
@@ -360,6 +448,8 @@ func (w *luauWriter) descriptor(f *field) (string, error) {
 		fmt.Sprintf("kind = %q", kind),
 	}
 	switch {
+	case f.isMap():
+		members = append(members, "repeated = true", "map = true")
 	case f.repeated:
 		members = append(members, "repeated = true")
 	case f.optional || w.absent[f] || f.oneof != nil && f.oneof.keyed:
@@ -382,6 +472,9 @@ func (w *luauWriter) descriptor(f *field) (string, error) {
 	}
 	if isID(f) {
 		members = append(members, "id = true")
+	}
+	if f.hero {
+		members = append(members, "resolve = heroName")
 	}
 	return strings.Join(members, ", "), nil
 }

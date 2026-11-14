@@ -1,0 +1,189 @@
+---
+title: Kill scoring and respawn
+description: Score each kill, bring the fallen back and end the round at a goal.
+---
+
+In a deathmatch, the first player to ten kills wins, and everyone who falls comes back into the fight.
+
+Your mod scores each kill the game reports, and brings the fallen hero back:
+
+<Samples>
+
+```ts
+import { after, onKill, onPlayerLeave, players, type Player } from 'modlock'
+
+const goal = 10
+const kills = new Map<Player, number>()
+
+onKill(({ victimPlayer, attackerPlayer }) => {
+  if (victimPlayer.slot < 0) {
+    return // a unit, not a hero
+  }
+  after(3, () => victimPlayer.respawn())
+  if (attackerPlayer.slot < 0 || attackerPlayer.slot === victimPlayer.slot) {
+    return // a hazard, a unit or the hero's own hit
+  }
+  const name = attackerPlayer.connection()?.name ?? 'Someone'
+  const total = (kills.get(attackerPlayer) ?? 0) + 1
+  kills.set(attackerPlayer, total)
+  const won = total >= goal
+  for (const { player } of players()) {
+    if (won) {
+      player.announce(`${name} wins`, 'A new round starts now.')
+    } else {
+      player.centerText(`${name}: ${total} / ${goal}`)
+    }
+  }
+  if (won) {
+    kills.clear()
+  }
+})
+
+onPlayerLeave(({ connection }) => {
+  kills.delete(connection.player)
+})
+```
+
+```luau
+local modlock = require("@modlock")
+
+local goal = 10
+local kills: { [modlock.Player]: number } = {}
+
+modlock.onKill(function(kill)
+	local victim, scorer = kill.victimPlayer, kill.attackerPlayer
+	if victim.slot < 0 then
+		return -- a unit, not a hero
+	end
+	modlock.after(3, function()
+		victim:respawn()
+	end)
+	if scorer.slot < 0 or scorer.slot == victim.slot then
+		return -- a hazard, a unit or the hero's own hit
+	end
+	local connection = scorer:connection()
+	local name = if connection then connection.name else "Someone"
+	local total = (kills[scorer] or 0) + 1
+	kills[scorer] = total
+	local won = total >= goal
+	for _, other in modlock.players() do
+		if won then
+			other.player:announce(`{name} wins`, "A new round starts now.")
+		else
+			other.player:centerText(`{name}: {total} / {goal}`)
+		end
+	end
+	if won then
+		kills = {}
+	end
+end)
+
+modlock.onPlayerLeave(function(left)
+	kills[left.connection.player] = nil
+end)
+```
+
+```python
+import modlock
+
+GOAL = 10
+kills: dict[modlock.Player, int] = {}
+
+
+@modlock.on_kill
+def scored(kill: modlock.KillEvent) -> None:
+    victim, scorer = kill.victim_player, kill.attacker_player
+    if victim.slot < 0:
+        return  # a unit, not a hero
+    modlock.after(3, victim.respawn)
+    if scorer.slot < 0 or scorer.slot == victim.slot:
+        return  # a hazard, a unit or the hero's own hit
+    connection = scorer.connection()
+    name = connection.name if connection is not None else "Someone"
+    total = kills.get(scorer, 0) + 1
+    kills[scorer] = total
+    won = total >= GOAL
+    for other in modlock.players():
+        if won:
+            other.player.announce(f"{name} wins", "A new round starts now.")
+        else:
+            other.player.center_text(f"{name}: {total} / {GOAL}")
+    if won:
+        kills.clear()
+
+
+@modlock.on_player_leave
+def left(event: modlock.PlayerLeftEvent) -> None:
+    kills.pop(event.connection.player, None)
+```
+
+```go
+package main
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/paralin/modlock/mod"
+)
+
+const goal = 10
+
+var kills = map[mod.Player]int{}
+
+func init() {
+	mod.OnKill(func(kill *mod.KillEvent) {
+		victim := mod.PlayerOf(kill.GetVictimPlayer())
+		scorer := mod.PlayerOf(kill.GetAttackerPlayer())
+		if victim.Slot() < 0 {
+			return // a unit, not a hero
+		}
+		mod.After(3*time.Second, func() { _ = victim.Respawn() })
+		if scorer.Slot() < 0 || scorer.Slot() == victim.Slot() {
+			return // a hazard, a unit or the hero's own hit
+		}
+		name := "Someone"
+		if c := scorer.Connection(); c != nil {
+			name = c.GetName()
+		}
+		kills[scorer]++
+		total := kills[scorer]
+		won := total >= goal
+		connections, _ := mod.Players()
+		for _, c := range connections {
+			p := mod.PlayerOf(c.GetPlayer())
+			if won {
+				_ = p.Announce(name+" wins", "A new round starts now.")
+			} else {
+				_ = p.CenterText(fmt.Sprintf("%s: %d / %d", name, total, goal))
+			}
+		}
+		if won {
+			clear(kills)
+		}
+	})
+
+	mod.OnPlayerLeave(func(left *mod.PlayerLeftEvent) {
+		delete(kills, mod.PlayerOf(left.GetConnection().GetPlayer()))
+	})
+}
+
+func main() {}
+```
+
+</Samples>
+
+Bring a second player or a bot into the game and defeat them.
+
+The kill gives the player on each side, with a slot of -1 where no player's
+hero stands: a unit that died, or a unit or hazard that killed. A hero that
+killed itself is its own attacker, so it scores nothing. Each point shows every
+player the scorer's name and total, such as `Ana: 4 / 10`, in the middle of the
+screen, and at ten every player sees the announcement "_name_ wins".
+
+## Variations
+
+- Keep a score through a reconnect by keying it by Steam ID instead of player. The sample keys scores by player and drops them when the player leaves.
+- Pay the scorer with `adjustSouls` or heal them to reward a streak.
+- Count kills across sessions with a [metric](/guides/data#metrics), or rank players with a [board](/guides/data#boards).
+- The [`bounty`](https://github.com/paralin/modlock/tree/master/examples/bounty) example builds on this. The leader carries a marker, and whoever defeats them takes it.

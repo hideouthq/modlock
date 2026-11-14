@@ -17,6 +17,7 @@
 
 #include "modlock/engine_host.h"
 #include "modlock/gameinterop/ability_charge_limit.h"
+#include "modlock/gameinterop/ability_cooldown.h"
 #include "modlock/gameinterop/ability_input_hook.h"
 #include "modlock/gameinterop/ability_modifier.h"
 #include "modlock/gameinterop/ability_slots.h"
@@ -355,6 +356,10 @@ class Game : public HostService {
   // paused and stops watching projectiles.
   void Clear();
 
+  // Cast describes one executed ability for the mod: the caster's player,
+  // and the ability's name and slot when a player's hero cast it.
+  abilities::AbilityCastEvent Cast(uint32_t caster, uint32_t ability, uint32_t target);
+
   // SlotOfPawn returns the slot of the player whose hero the entity handle
   // names, or no value for any other entity.
   std::optional<int32_t> SlotOfPawn(uint32_t handle) const { return observer_.SlotOfPawn(handle); }
@@ -493,6 +498,10 @@ class Game : public HostService {
       const abilities::HoldModifierRequest& request) override;
   std::expected<void, std::string> GiveModifier(
       const abilities::GiveModifierRequest& request) override;
+  std::expected<void, std::string> HoldEntityModifier(
+      const abilities::HoldEntityModifierRequest& request) override;
+  std::expected<void, std::string> GiveEntityModifier(
+      const abilities::GiveEntityModifierRequest& request) override;
   std::expected<void, std::string> Teleport(const movement::TeleportRequest& request) override;
   std::expected<void, std::string> Zipline(const movement::ZiplineRequest& request) override;
   std::expected<void, std::string> MovePlayer(const movement::MovePlayerRequest& request) override;
@@ -523,6 +532,8 @@ class Game : public HostService {
       const fields::ReadFieldRequest& request) override;
   std::expected<fields::FieldResponse, std::string> ReadModifierField(
       const fields::ReadModifierFieldRequest& request) override;
+  std::expected<abilities::ModifiersResponse, std::string> Modifiers(
+      const entities::EntityRequest& request) override;
   std::expected<void, std::string> WriteFieldList(
       const fields::WriteFieldListRequest& request) override;
   std::expected<entities::EntityClassResponse, std::string> EntityClass(
@@ -707,6 +718,10 @@ class Game : public HostService {
   // time without the ticks the game spent paused.
   std::expected<float, std::string> LatchTime();
 
+  // SetCooldownLength makes seconds the length of the ability's cooldowns,
+  // or returns it to the game's own when seconds is negative.
+  std::expected<void, std::string> SetCooldownLength(int32_t slot, uint32_t handle, float seconds);
+
   // LimitCharges makes maximum the most charges the player's ability holds.
   std::expected<void, std::string> LimitCharges(int32_t slot, uint32_t handle, int32_t maximum);
 
@@ -726,6 +741,10 @@ class Game : public HostService {
     unsigned char* predicted = nullptr;
     uint32_t bit = 0;
   };
+
+  // EntityModifiers returns the address of each modifier entity holds, in
+  // the game's order, or none for an entity without a modifier property.
+  std::expected<std::vector<unsigned char*>, std::string> EntityModifiers(void* entity);
 
   // FindModifierWord locates state on entity, or returns nothing when the
   // entity has no modifiers.
@@ -762,13 +781,33 @@ class Game : public HostService {
   // reports the concept names the game did not know, from unknown.
   std::expected<void, std::string> Silence(const std::string& unknown);
 
+  // EnsureHeldModifier resolves key with no expiry once for all active holds.
+  std::expected<void, std::string> EnsureHeldModifier(const std::string& key);
+
+  // EntityAbilityHandle returns the owned ability handle when handle is a
+  // player's hero that owns key's parent ability, or kInvalidEHandleIndex.
+  uint32_t EntityAbilityHandle(uint32_t handle, std::string_view key);
+
   // RenewModifier gives slot's living hero the held modifier when it lacks
   // it. A dead or absent hero waits for its return.
   std::expected<void, std::string> RenewModifier(int32_t slot, const std::string& key);
 
+  // RenewEntityModifier gives handle's live entity the held modifier when it
+  // lacks it. When initial is true, a dead entity fails the hold.
+  std::expected<void, std::string> RenewEntityModifier(uint32_t handle, const std::string& key,
+                                                       bool initial);
+
   // ReleaseModifier ends slot's hold on key and restores the modifier's
-  // duration once no player holds it.
+  // duration once nothing holds it.
   void ReleaseModifier(int32_t slot, const std::string& key);
+
+  // ReleaseEntityModifier ends handle's hold on key and restores the modifier's
+  // duration once nothing holds it.
+  void ReleaseEntityModifier(uint32_t handle, const std::string& key);
+
+  // RestoreUnusedModifier restores and forgets key once no slot or entity holds
+  // it.
+  void RestoreUnusedModifier(const std::string& key);
 
   // ReleaseModifiers ends every modifier hold.
   void ReleaseModifiers();
@@ -899,14 +938,20 @@ class Game : public HostService {
   std::string addon_;
   std::set<uint32_t> ffa_held_;
   std::set<int32_t> seat_failed_;
-  // held_modifiers_ is the modifiers the mod holds, by player slot and
-  // modifier key; modifiers_ resolves each held key.
+  // held_modifiers_ and held_entity_modifiers_ are the modifiers the mod holds,
+  // by player slot or entity handle and modifier key; modifiers_ resolves each
+  // held key.
   std::set<std::pair<int32_t, std::string>> held_modifiers_;
+  std::set<std::pair<uint32_t, std::string>> held_entity_modifiers_;
   std::map<std::string, gameinterop::AbilityModifier, std::less<>> modifiers_;
 
+  // cooldown_ holds the cooldown lengths the mod gave abilities, created the
+  // first time one is given; it puts the game's own lengths back when the
+  // mod stops.
+  std::unique_ptr<gameinterop::AbilityCooldown> cooldown_;
   // charge_limit_ holds the most charges the mod gave abilities, created the
   // first time one is limited; it puts the game's own maximums back when the
-  // game ends.
+  // mod stops.
   std::unique_ptr<gameinterop::AbilityChargeLimit> charge_limit_;
   // input_ is the mod's blocks, presses, remap and watched buttons.
   InputChanges input_;

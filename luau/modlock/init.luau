@@ -44,6 +44,16 @@ local function with(options: any, name: string, value: any): any
 	return request
 end
 
+-- heroNamed is modlock.heroNamed, which the library defines below.
+local heroNamed: (name: string) -> { name: string }?
+
+-- heroName returns the game's name of the hero name names, as heroNamed
+-- matches it, or name itself when it names no released hero.
+local function heroName(name: string): string
+	local hero = heroNamed(name)
+	return if hero then hero.name else name
+end
+
 -- ScreenEffect is a stock full-screen view effect.
 export type ScreenEffect = "killed" | "black" | "blinded" | "darkness" | "matchIntro"
 local ScreenEffect: { [any]: any } = {
@@ -512,6 +522,45 @@ export type AbilityOptions = {
 	-- screen can still show the game's maximum. charges above the new maximum
 	-- are not removed; set them with charges.
 	maxCharges: number?,
+	-- cooldown makes every cooldown the ability starts from now on last this
+	-- many seconds, in place of the game's own length. An ability that holds
+	-- charges waits this long between casts. 0 leaves the ability always
+	-- ready, and a negative value returns it to the game's own. The game asks
+	-- for the length as it starts each cooldown and applies the hero's cooldown
+	-- reduction to it, so it holds for every later cast and the hero's screen
+	-- shows it; a cooldown already running keeps its end, which cooldown_end
+	-- moves. It holds for this ability of this hero until the mod stops, so
+	-- set it again after a hero change or a replaced ability.
+	cooldown: number?,
+}
+
+-- Modifier is one modifier an entity holds, as the game keeps it.
+export type Modifier = {
+	-- name is the modifier's name, such as modifier_citadel_knockdown, as
+	-- GiveModifier and ReadModifierField name it. It is empty when the game
+	-- keeps no readable name.
+	name: string,
+	-- className is the modifier's server class, such as
+	-- CCitadel_Modifier_Knockdown, which ReadModifierField takes. Several
+	-- names can share a class.
+	className: string,
+	-- caster is the handle of the entity that applied it, such as the hero
+	-- whose ability did, or 0 when none did.
+	caster: number,
+	-- ability is the handle of the ability that applied it, or 0 when none did.
+	ability: number,
+	-- age is how many seconds ago the game created it.
+	age: number,
+	-- remaining is how many seconds it has left since it was last applied. It
+	-- is absent for a modifier that lasts until something removes it.
+	remaining: number?,
+	-- stacks and maxStacks count its stacks, for a modifier that stacks.
+	stacks: number,
+	maxStacks: number,
+	-- team is the team number it belongs to.
+	team: number,
+	-- disabled is true while the game keeps it without its effects.
+	disabled: boolean,
 }
 
 -- BuildCategory is one named group of a build's items.
@@ -531,6 +580,26 @@ export type BuildItem = {
 	item: string,
 	-- annotation is the author's note on the item.
 	annotation: string,
+}
+
+-- AbilityCastEvent reports one ability the game executed: the moment the
+-- cast takes effect, after any cast time, for a hero's abilities and the
+-- items a player activates.
+export type AbilityCastEvent = {
+	-- caster is the entity that cast it, a hero for a player's cast.
+	caster: number,
+	-- player is the slot of the player whose hero cast it, or -1.
+	player: Player,
+	-- ability is the ability's entity handle, as ability.entity reports it.
+	ability: number,
+	-- name is the ability's name, such as citadel_ability_hornet_snipe, when
+	-- a player's hero cast it.
+	name: string,
+	-- slot is the ability's place on the hero, as ability.slot reports it, or
+	-- -1 when the caster is not a player's hero.
+	slot: number,
+	-- target is the entity the cast was aimed at, or zero without one.
+	target: number,
 }
 
 -- DamageEvent is one hit before the game applies it. Handles are zero when
@@ -578,6 +647,22 @@ export type DamagedEvent = {
 	-- dealt is the hit's damage after resistances, before the victim's health
 	-- capped it.
 	dealt: number,
+}
+
+-- KillEvent reports one hero or unit that a hit killed.
+export type KillEvent = {
+	-- victim is the entity that died.
+	victim: number,
+	-- victimPlayer is the slot of the player whose hero died, or -1 for a unit.
+	victimPlayer: Player,
+	-- attacker is the entity credited with the killing hit, or zero for a
+	-- hazard.
+	attacker: number,
+	-- attackerPlayer is the slot of the player whose hero is the attacker, or
+	-- -1. It is the victim's own slot when a hero killed itself.
+	attackerPlayer: Player,
+	-- ability is the ability that dealt the killing hit, or zero.
+	ability: number,
 }
 
 -- LaunchEvent is a watched projectile's first frame.
@@ -686,6 +771,83 @@ export type TraceHit = {
 	startSolid: boolean,
 	-- entity is the entity hit, or zero for the world.
 	entity: number,
+}
+
+-- ModifierFiredEvent reports one of the game's modifier events the mod
+-- watches, with the entities the game fired it with. Which of them an event
+-- fills depends on the event.
+export type ModifierFiredEvent = {
+	-- name is the event as the mod named it in StartResult.modifier_events.
+	name: string,
+	-- caster is the entity the event is about, such as the hero that parried
+	-- or respawned, or zero.
+	caster: number,
+	-- player is the slot of the player whose hero the caster is, or -1.
+	player: Player,
+	-- target is the other entity of the event, such as the victim of a kill,
+	-- or zero.
+	target: number,
+	-- ability is the ability or other entity the event names as its source, or
+	-- zero.
+	ability: number,
+}
+
+-- HealEvent reports health an ability, item or lifesteal restored at once to
+-- a hero or unit. Regeneration reports none, including what abilities such as
+-- Siphon Life restore as regeneration, and neither do Modlock's own heal and
+-- a heal at full health.
+export type HealEvent = {
+	-- target is the entity healed.
+	target: number,
+	-- targetPlayer is the slot of the player whose hero was healed, or -1 for
+	-- a unit.
+	targetPlayer: Player,
+	-- healer is the entity the heal came from, or zero when the game names
+	-- none.
+	healer: number,
+	-- healerPlayer is the slot of the player whose hero the healer is, or -1.
+	healerPlayer: Player,
+	-- ability is the ability or item that healed, or zero.
+	ability: number,
+	-- applied is the health the heal restored.
+	applied: number,
+	-- requested is the heal's whole amount; it exceeds applied when the target
+	-- reached full health.
+	requested: number,
+}
+
+-- LevelEvent reports a hero reaching a new level.
+export type LevelEvent = {
+	-- hero is the hero's entity.
+	hero: number,
+	-- player is the slot of the player whose hero it is, or -1.
+	player: Player,
+	-- level is the hero's new level.
+	level: number,
+}
+
+-- MeleeEvent reports one melee swing as the game resolves it.
+export type MeleeEvent = {
+	-- attacker is the hero or unit that swung.
+	attacker: number,
+	-- attackerPlayer is the slot of the player whose hero swung, or -1.
+	attackerPlayer: Player,
+	-- heavy is true for a charged swing and false for a light one.
+	heavy: boolean,
+	-- hits are the entities the swing struck, empty for a miss.
+	hits: { number },
+}
+
+-- ParryEvent reports a parry that caught a melee swing.
+export type ParryEvent = {
+	-- parrier is the hero that parried.
+	parrier: number,
+	-- player is the slot of the player whose hero parried, or -1.
+	player: Player,
+	-- attacker is the hero or unit whose swing was caught.
+	attacker: number,
+	-- attackerPlayer is the slot of the player whose hero swung, or -1.
+	attackerPlayer: Player,
 }
 
 -- SoundOptions shape one sound; the zero value plays it to every player as
@@ -825,7 +987,8 @@ export type SettingChangedEvent = {
 	value: string,
 }
 
--- DefinitionFieldOptions reads a direct float from a modifier definition.
+-- DefinitionFieldOptions names a float field of a definition entry by the
+-- same file, entry and path a Definition's fields use.
 export type DefinitionFieldOptions = {
 	file: Definition_File,
 	entry: string,
@@ -1500,6 +1663,25 @@ export type StartResult = {
 	-- joins asks for a PlayerJoined event as each player the mod serves joins,
 	-- and a PlayerLeft event as each leaves.
 	joins: boolean,
+	-- casts asks for an AbilityCast event after each ability the game
+	-- executes.
+	casts: boolean,
+	-- modifierEvents asks for a ModifierFired event for each of the game's
+	-- modifier events with these EModifierEvent names, such as
+	-- MODIFIER_EVENT_ABILITY_CAST_STARTED or, without the prefix,
+	-- ABILITY_CAST_STARTED. A name the running game lacks is logged and never
+	-- fires.
+	modifierEvents: { string }?,
+	-- kills asks for a Killed event after each hit that kills a hero or unit.
+	kills: boolean,
+	-- heals asks for a Healed event after each heal.
+	heals: boolean,
+	-- levels asks for a LevelChanged event as each hero reaches a new level.
+	levels: boolean,
+	-- melees asks for a Melee event after each melee swing.
+	melees: boolean,
+	-- parries asks for a Parried event after each parry that catches a swing.
+	parries: boolean,
 }
 
 -- FrameEvent identifies one server frame.
@@ -1811,13 +1993,45 @@ export type Player = {
 	-- watchMovement adds a player's hero to the movement samples of each Frame
 	-- event on a new tick, or removes it.
 	watchMovement: (self: Player, watch: boolean) -> boolean,
+	-- connection returns the player's connection: their name, Steam ID, whether
+	-- they are a bot and whether they finished joining. It returns nil when
+	-- nobody holds the slot.
+	connection: (self: Player) -> Connection?,
+	-- seat gives the player a hero on a team, skipping the game's team and hero
+	-- screens. Call it as the player joins:
+	--
+	--     modlock.onPlayerJoin(function(joined)
+	--         joined.connection.player:seat({ hero = "haze", team = 2 })
+	--     end)
+	--
+	-- The hero appears on a later frame, and onSpawn hears of it. The library asks
+	-- the game again until the player has the seat, and once more after the player
+	-- changes hero, so a call before the game is ready is not lost. Seating the
+	-- player again replaces the seat, and it ends when they leave. It returns
+	-- false when nobody holds the player's slot.
+	seat: (self: Player, options: Seating?) -> boolean,
 }
 local Player = {}
 Player.__index = Player
 
--- new returns the Player with slot.
+-- playerObjects holds the Player of each slot that Player.new made.
+local playerObjects: { [number]: Player } = {}
+
+-- new returns the Player with slot, the same object each time until release
+-- forgets it, so == tells whether two values are the same player and a
+-- Player works as a table key.
 function Player.new(slot: number): Player
-	return setmetatable({ slot = slot }, Player) :: any
+	local object = playerObjects[slot]
+	if object == nil then
+		object = table.freeze(setmetatable({ slot = slot }, Player)) :: any
+		playerObjects[slot] = object
+	end
+	return object
+end
+
+-- release forgets the Player for slot, so the next Player.new makes a new one.
+function Player.release(slot: number)
+	playerObjects[slot] = nil
 end
 
 -- chat sends a server chat line to the player.
@@ -2440,6 +2654,218 @@ end
 
 modlock.Pickup = Pickup
 
+-- Kind holds the wire names of the interface enum Kind.
+local Kind: { [any]: any } = {
+	[0] = "panel",
+	panel = 0,
+	[1] = "label",
+	label = 1,
+	[2] = "image",
+	image = 2,
+	[3] = "button",
+	button = 3,
+	[4] = "layout",
+	layout = 4,
+	[5] = "route",
+	route = 5,
+	[6] = "heroImage",
+	heroImage = 6,
+	[7] = "input",
+	input = 7,
+	[8] = "avatar",
+	avatar = 8,
+}
+
+-- Flow holds the wire names of the interface enum Flow.
+local Flow: { [any]: any } = {
+	[0] = "none",
+	none = 0,
+	[1] = "down",
+	down = 1,
+	[2] = "right",
+	right = 2,
+	[3] = "downWrap",
+	downWrap = 3,
+	[4] = "rightWrap",
+	rightWrap = 4,
+}
+
+-- Align holds the wire names of the interface enum Align.
+local Align: { [any]: any } = {
+	[0] = "start",
+	start = 0,
+	[1] = "center",
+	center = 1,
+	[2] = "end",
+	["end"] = 2,
+}
+
+-- Face holds the wire names of the interface enum Face.
+local Face: { [any]: any } = {
+	[0] = "default",
+	default = 0,
+	[1] = "body",
+	body = 1,
+	[2] = "block",
+	block = 2,
+	[3] = "serif",
+	serif = 3,
+}
+
+-- Overflow holds the wire names of the interface enum Overflow.
+local Overflow: { [any]: any } = {
+	[0] = "default",
+	default = 0,
+	[1] = "squish",
+	squish = 1,
+	[2] = "clip",
+	clip = 2,
+	[3] = "scroll",
+	scroll = 3,
+	[4] = "show",
+	show = 4,
+}
+
+-- GradientShape holds the wire names of the interface enum GradientShape.
+local GradientShape: { [any]: any } = {
+	[0] = "down",
+	down = 0,
+	[1] = "right",
+	right = 1,
+	[2] = "up",
+	up = 2,
+	[3] = "left",
+	left = 3,
+	[4] = "radial",
+	radial = 4,
+}
+
+-- Weight holds the wire names of the interface enum Weight.
+local Weight: { [any]: any } = {
+	[0] = "default",
+	default = 0,
+	[1] = "thin",
+	thin = 1,
+	[2] = "light",
+	light = 2,
+	[3] = "normal",
+	normal = 3,
+	[4] = "medium",
+	medium = 4,
+	[5] = "semiBold",
+	semiBold = 5,
+	[6] = "bold",
+	bold = 6,
+	[7] = "black",
+	black = 7,
+}
+
+-- TextOverflow holds the wire names of the interface enum TextOverflow.
+local TextOverflow: { [any]: any } = {
+	[0] = "default",
+	default = 0,
+	[1] = "ellipsis",
+	ellipsis = 1,
+	[2] = "shrink",
+	shrink = 2,
+	[3] = "clip",
+	clip = 3,
+}
+
+-- Decoration holds the wire names of the interface enum Decoration.
+local Decoration: { [any]: any } = {
+	[0] = "none",
+	none = 0,
+	[1] = "underline",
+	underline = 1,
+	[2] = "strike",
+	strike = 2,
+}
+
+-- Easing holds the wire names of the interface enum Easing.
+local Easing: { [any]: any } = {
+	[0] = "easeOut",
+	easeOut = 0,
+	[1] = "easeIn",
+	easeIn = 1,
+	[2] = "easeInOut",
+	easeInOut = 2,
+	[3] = "linear",
+	linear = 3,
+}
+
+-- HudPart holds the wire names of the interface enum HudPart.
+local HudPart: { [any]: any } = {
+	[1] = "levelUp",
+	levelUp = 1,
+	[2] = "ownHealth",
+	ownHealth = 2,
+	[3] = "topBar",
+	topBar = 3,
+	[4] = "ammo",
+	ammo = 4,
+	[5] = "souls",
+	souls = 5,
+	[6] = "minimap",
+	minimap = 6,
+	[7] = "abilities",
+	abilities = 7,
+	[8] = "status",
+	status = 8,
+	[9] = "stats",
+	stats = 9,
+	[10] = "heroPicker",
+	heroPicker = 10,
+	[11] = "brokerCountdown",
+	brokerCountdown = 11,
+	[12] = "all",
+	all = 12,
+}
+
+-- Scaling holds the wire names of the interface enum Scaling.
+local Scaling: { [any]: any } = {
+	[0] = "default",
+	default = 0,
+	[1] = "fit",
+	fit = 1,
+	[2] = "cover",
+	cover = 2,
+	[3] = "stretch",
+	stretch = 3,
+	[4] = "fitWidth",
+	fitWidth = 4,
+	[5] = "fitHeight",
+	fitHeight = 5,
+	[6] = "none",
+	none = 6,
+}
+
+-- HeroLook holds the wire names of the interface enum HeroLook.
+local HeroLook: { [any]: any } = {
+	[0] = "small",
+	small = 0,
+	[1] = "card",
+	card = 1,
+	[2] = "icon",
+	icon = 2,
+	[3] = "vertical",
+	vertical = 3,
+	[4] = "topBar",
+	topBar = 4,
+	[5] = "minimap",
+	minimap = 5,
+}
+
+-- Window holds the wire names of the service enum Window.
+local Window: { [any]: any } = {
+	[1] = "allTime",
+	allTime = 1,
+	[2] = "day",
+	day = 2,
+	[3] = "week",
+	week = 3,
+}
+
 schema.HoldReloadRequest = {
 	{ number = 1, name = "held", kind = "bool" },
 }
@@ -2472,6 +2898,7 @@ schema.AbilityOptions = {
 	{ number = 5, name = "cooldownEnd", kind = "float", optional = true },
 	{ number = 6, name = "rechargeEnd", kind = "float", optional = true },
 	{ number = 7, name = "maxCharges", kind = "int32", optional = true },
+	{ number = 8, name = "cooldown", kind = "float", optional = true },
 }
 schema.GiveItemRequest = {
 	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
@@ -2511,13 +2938,28 @@ schema.ModifierStateRequest = {
 schema.ActiveResponse = {
 	{ number = 1, name = "active", kind = "bool" },
 }
+schema.ModifiersResponse = {
+	{ number = 1, name = "modifiers", kind = "message", repeated = true, message = "Modifier" },
+}
+schema.Modifier = {
+	{ number = 1, name = "name", kind = "string" },
+	{ number = 2, name = "className", kind = "string" },
+	{ number = 3, name = "caster", kind = "uint32" },
+	{ number = 4, name = "ability", kind = "uint32" },
+	{ number = 5, name = "age", kind = "float" },
+	{ number = 6, name = "remaining", kind = "float", optional = true },
+	{ number = 7, name = "stacks", kind = "int32" },
+	{ number = 8, name = "maxStacks", kind = "int32" },
+	{ number = 9, name = "team", kind = "uint32" },
+	{ number = 10, name = "disabled", kind = "bool" },
+}
 schema.HoldModifierStateRequest = {
 	{ number = 1, name = "entity", kind = "uint32" },
 	{ number = 2, name = "state", kind = "string" },
 	{ number = 3, name = "active", kind = "bool", optional = true },
 }
 schema.HeroBuildRequest = {
-	{ number = 1, name = "hero", kind = "string" },
+	{ number = 1, name = "hero", kind = "string", resolve = heroName },
 }
 schema.HeroBuildResponse = {
 	{ number = 1, name = "categories", kind = "message", repeated = true, message = "BuildCategory" },
@@ -2530,6 +2972,24 @@ schema.BuildCategory = {
 schema.BuildItem = {
 	{ number = 1, name = "item", kind = "string" },
 	{ number = 2, name = "annotation", kind = "string" },
+}
+schema.HoldEntityModifierRequest = {
+	{ number = 1, name = "entity", kind = "uint32" },
+	{ number = 2, name = "modifier", kind = "string" },
+	{ number = 3, name = "active", kind = "bool", optional = true },
+}
+schema.GiveEntityModifierRequest = {
+	{ number = 1, name = "entity", kind = "uint32" },
+	{ number = 2, name = "modifier", kind = "string" },
+	{ number = 3, name = "seconds", kind = "float" },
+}
+schema.AbilityCastEvent = {
+	{ number = 1, name = "caster", kind = "uint32" },
+	{ number = 2, name = "player", kind = "int32", class = Player, key = "slot" },
+	{ number = 3, name = "ability", kind = "uint32" },
+	{ number = 4, name = "name", kind = "string" },
+	{ number = 5, name = "slot", kind = "int32" },
+	{ number = 6, name = "target", kind = "uint32" },
 }
 schema.Vec3 = {
 	{ number = 1, name = "x", kind = "double" },
@@ -2561,6 +3021,13 @@ schema.DamagedEvent = {
 	{ number = 4, name = "healthLost", kind = "int32" },
 	{ number = 5, name = "healthBefore", kind = "int32" },
 	{ number = 6, name = "dealt", kind = "int32" },
+}
+schema.KillEvent = {
+	{ number = 1, name = "victim", kind = "uint32" },
+	{ number = 2, name = "victimPlayer", kind = "int32", class = Player, key = "slot" },
+	{ number = 3, name = "attacker", kind = "uint32" },
+	{ number = 4, name = "attackerPlayer", kind = "int32", class = Player, key = "slot" },
+	{ number = 5, name = "ability", kind = "uint32" },
 }
 schema.LaunchEvent = {
 	{ number = 1, name = "entity", kind = "uint32" },
@@ -2612,6 +3079,39 @@ schema.TraceHit = {
 	{ number = 2, name = "normal", kind = "message", message = "Vec3" },
 	{ number = 3, name = "startSolid", kind = "bool" },
 	{ number = 4, name = "entity", kind = "uint32" },
+}
+schema.ModifierFiredEvent = {
+	{ number = 1, name = "name", kind = "string" },
+	{ number = 2, name = "caster", kind = "uint32" },
+	{ number = 3, name = "player", kind = "int32", class = Player, key = "slot" },
+	{ number = 4, name = "target", kind = "uint32" },
+	{ number = 5, name = "ability", kind = "uint32" },
+}
+schema.HealEvent = {
+	{ number = 1, name = "target", kind = "uint32" },
+	{ number = 2, name = "targetPlayer", kind = "int32", class = Player, key = "slot" },
+	{ number = 3, name = "healer", kind = "uint32" },
+	{ number = 4, name = "healerPlayer", kind = "int32", class = Player, key = "slot" },
+	{ number = 5, name = "ability", kind = "uint32" },
+	{ number = 6, name = "applied", kind = "int32" },
+	{ number = 7, name = "requested", kind = "int32" },
+}
+schema.LevelEvent = {
+	{ number = 1, name = "hero", kind = "uint32" },
+	{ number = 2, name = "player", kind = "int32", class = Player, key = "slot" },
+	{ number = 3, name = "level", kind = "int32" },
+}
+schema.MeleeEvent = {
+	{ number = 1, name = "attacker", kind = "uint32" },
+	{ number = 2, name = "attackerPlayer", kind = "int32", class = Player, key = "slot" },
+	{ number = 3, name = "heavy", kind = "bool" },
+	{ number = 4, name = "hits", kind = "uint32", repeated = true },
+}
+schema.ParryEvent = {
+	{ number = 1, name = "parrier", kind = "uint32" },
+	{ number = 2, name = "player", kind = "int32", class = Player, key = "slot" },
+	{ number = 3, name = "attacker", kind = "uint32" },
+	{ number = 4, name = "attackerPlayer", kind = "int32", class = Player, key = "slot" },
 }
 schema.ChatRequest = {
 	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
@@ -2889,6 +3389,62 @@ schema.AddMetricRequest = {
 	{ number = 2, name = "name", kind = "string" },
 	{ number = 3, name = "value", kind = "double" },
 	{ number = 4, name = "label", kind = "string", optional = true },
+}
+schema.ScoreReport = {
+	{ number = 1, name = "board", kind = "string" },
+	{ number = 2, name = "player", kind = "int32", class = Player, key = "slot" },
+	{ number = 3, name = "value", kind = "int64" },
+	{ number = 4, name = "tiebreak", kind = "int64" },
+	{ number = 5, name = "partition", kind = "message", repeated = true, map = true, message = "ScoreReport_PartitionEntry" },
+	{ number = 6, name = "key", kind = "string" },
+	{ number = 7, name = "earnedAtUnixMillis", kind = "int64" },
+	{ number = 8, name = "evidence", kind = "string" },
+}
+schema.ScoreReport_PartitionEntry = {
+	{ number = 1, name = "key", kind = "string" },
+	{ number = 2, name = "value", kind = "string" },
+}
+schema.MatchReport = {
+	{ number = 1, name = "board", kind = "string" },
+	{ number = 2, name = "places", kind = "message", repeated = true, message = "Place" },
+	{ number = 3, name = "partition", kind = "message", repeated = true, map = true, message = "MatchReport_PartitionEntry" },
+	{ number = 4, name = "key", kind = "string" },
+	{ number = 5, name = "earnedAtUnixMillis", kind = "int64" },
+	{ number = 6, name = "evidence", kind = "string" },
+}
+schema.MatchReport_PartitionEntry = {
+	{ number = 1, name = "key", kind = "string" },
+	{ number = 2, name = "value", kind = "string" },
+}
+schema.Place = {
+	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
+	{ number = 2, name = "place", kind = "uint32" },
+	{ number = 3, name = "value", kind = "int64" },
+}
+schema.BoardQuery = {
+	{ number = 1, name = "board", kind = "string" },
+	{ number = 2, name = "partition", kind = "message", repeated = true, map = true, message = "BoardQuery_PartitionEntry" },
+	{ number = 3, name = "window", kind = "enum", enum = Window },
+	{ number = 4, name = "offset", kind = "uint32" },
+	{ number = 5, name = "limit", kind = "uint32" },
+	{ number = 6, name = "player", kind = "int32", optional = true, class = Player, key = "slot" },
+}
+schema.BoardQuery_PartitionEntry = {
+	{ number = 1, name = "key", kind = "string" },
+	{ number = 2, name = "value", kind = "string" },
+}
+schema.BoardPage = {
+	{ number = 1, name = "rows", kind = "message", repeated = true, message = "Standing" },
+	{ number = 2, name = "player", kind = "message", optional = true, message = "Standing" },
+	{ number = 3, name = "loading", kind = "bool" },
+}
+schema.Standing = {
+	{ number = 1, name = "rank", kind = "uint32" },
+	{ number = 2, name = "steamId", kind = "uint64", id = true },
+	{ number = 3, name = "name", kind = "string" },
+	{ number = 4, name = "value", kind = "int64" },
+	{ number = 5, name = "tiebreak", kind = "int64" },
+	{ number = 6, name = "count", kind = "uint32" },
 }
 schema.SettingChangedEvent = {
 	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
@@ -3198,7 +3754,7 @@ schema.Score = {
 }
 schema.SelectHeroRequest = {
 	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
-	{ number = 2, name = "heroName", kind = "string", oneof = "hero" },
+	{ number = 2, name = "heroName", kind = "string", oneof = "hero", resolve = heroName },
 	{ number = 3, name = "heroId", kind = "uint32", oneof = "hero" },
 	{ number = 4, name = "team", kind = "int32" },
 }
@@ -3339,16 +3895,196 @@ schema.TimerTarget = {
 schema.BotOptions = {
 	{ number = 1, name = "name", kind = "string" },
 	{ number = 2, name = "team", kind = "int32" },
-	{ number = 3, name = "heroName", kind = "string", oneof = "hero" },
+	{ number = 3, name = "heroName", kind = "string", oneof = "hero", resolve = heroName },
 	{ number = 4, name = "heroId", kind = "uint32", oneof = "hero" },
 	{ number = 5, name = "position", kind = "message", optional = true, message = "Vec3" },
 }
 schema.BotResponse = {
 	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
 }
+schema.Node = {
+	{ number = 1, name = "id", kind = "string" },
+	{ number = 2, name = "kind", kind = "enum", enum = Kind },
+	{ number = 3, name = "children", kind = "string", repeated = true },
+	{ number = 4, name = "text", kind = "string" },
+	{ number = 5, name = "image", kind = "string" },
+	{ number = 6, name = "style", kind = "message", message = "Style" },
+	{ number = 7, name = "layout", kind = "string" },
+	{ number = 8, name = "data", kind = "string" },
+	{ number = 9, name = "hideHud", kind = "enum", repeated = true, enum = HudPart },
+	{ number = 10, name = "route", kind = "string" },
+	{ number = 11, name = "hover", kind = "message", message = "Style" },
+	{ number = 12, name = "tooltip", kind = "string" },
+	{ number = 32, name = "item", kind = "uint32" },
+	{ number = 34, name = "ability", kind = "uint32" },
+	{ number = 35, name = "abilityPlayer", kind = "uint32" },
+	{ number = 13, name = "sound", kind = "string" },
+	{ number = 14, name = "hoverSound", kind = "string" },
+	{ number = 15, name = "disabled", kind = "bool" },
+	{ number = 16, name = "scaling", kind = "enum", enum = Scaling },
+	{ number = 17, name = "hero", kind = "int32" },
+	{ number = 18, name = "heroLook", kind = "enum", enum = HeroLook },
+	{ number = 19, name = "textEntry", kind = "message", oneof = "input", message = "TextEntry" },
+	{ number = 20, name = "slider", kind = "message", oneof = "input", message = "Slider" },
+	{ number = 21, name = "toggle", kind = "message", oneof = "input", message = "Toggle" },
+	{ number = 22, name = "dropdown", kind = "message", oneof = "input", message = "Dropdown" },
+	{ number = 23, name = "token", kind = "string" },
+	{ number = 24, name = "variables", kind = "message", repeated = true, message = "Node_VariablesEntry" },
+	{ number = 25, name = "steamId", kind = "fixed64", id = true },
+	{ number = 26, name = "enter", kind = "message", message = "Style" },
+	{ number = 27, name = "exit", kind = "message", message = "Style" },
+	{ number = 28, name = "cycle", kind = "message", message = "Cycle" },
+	{ number = 29, name = "classes", kind = "string", repeated = true },
+	{ number = 30, name = "sheets", kind = "string", repeated = true },
+	{ number = 31, name = "freeCursor", kind = "bool" },
+	{ number = 33, name = "freeCursorAsks", kind = "uint32" },
+	{ number = 36, name = "cues", kind = "message", repeated = true, message = "Cue" },
+	{ number = 37, name = "abilityBarPresses", kind = "bool" },
+	{ number = 38, name = "abilityDisplay", kind = "message", repeated = true, message = "AbilityRow" },
+}
+schema.Node_VariablesEntry = {
+	{ number = 1, name = "key", kind = "string" },
+	{ number = 2, name = "value", kind = "string" },
+}
+schema.AbilityRow = {
+	{ number = 1, name = "player", kind = "uint32", class = Player, key = "slot" },
+	{ number = 2, name = "name", kind = "string" },
+	{ number = 3, name = "hero", kind = "string" },
+	{ number = 4, name = "own", kind = "bool" },
+	{ number = 5, name = "abilities", kind = "message", repeated = true, message = "ShownAbility" },
+}
+schema.ShownAbility = {
+	{ number = 1, name = "ability", kind = "uint32" },
+	{ number = 2, name = "image", kind = "string" },
+	{ number = 3, name = "upgrades", kind = "uint32" },
+}
+schema.Cue = {
+	{ number = 1, name = "number", kind = "uint32" },
+	{ number = 2, name = "sound", kind = "string" },
+	{ number = 3, name = "seconds", kind = "float" },
+}
+schema.TextEntry = {
+	{ number = 1, name = "text", kind = "string" },
+	{ number = 2, name = "placeholder", kind = "string" },
+	{ number = 3, name = "maxLength", kind = "uint32" },
+}
+schema.Slider = {
+	{ number = 1, name = "value", kind = "float" },
+	{ number = 2, name = "min", kind = "float" },
+	{ number = 3, name = "max", kind = "float" },
+	{ number = 4, name = "step", kind = "float" },
+	{ number = 5, name = "wheel", kind = "bool" },
+}
 schema.Wheel = {
 	{ number = 1, name = "delta", kind = "float" },
 	{ number = 2, name = "fraction", kind = "float" },
+}
+schema.Toggle = {
+	{ number = 1, name = "on", kind = "bool" },
+}
+schema.Dropdown = {
+	{ number = 1, name = "options", kind = "string", repeated = true },
+	{ number = 2, name = "selected", kind = "uint32" },
+}
+schema.Cycle = {
+	{ number = 1, name = "style", kind = "message", message = "Style" },
+	{ number = 2, name = "seconds", kind = "float" },
+	{ number = 3, name = "count", kind = "uint32" },
+}
+schema.Style = {
+	{ number = 1, name = "width", kind = "message", message = "Length" },
+	{ number = 2, name = "height", kind = "message", message = "Length" },
+	{ number = 3, name = "flow", kind = "enum", enum = Flow },
+	{ number = 4, name = "horizontalAlign", kind = "enum", enum = Align },
+	{ number = 5, name = "verticalAlign", kind = "enum", enum = Align },
+	{ number = 6, name = "margin", kind = "message", message = "Edges" },
+	{ number = 7, name = "padding", kind = "message", message = "Edges" },
+	{ number = 8, name = "background", kind = "fixed32" },
+	{ number = 9, name = "color", kind = "fixed32" },
+	{ number = 10, name = "fontSize", kind = "float" },
+	{ number = 11, name = "bold", kind = "bool" },
+	{ number = 12, name = "textAlign", kind = "enum", enum = Align },
+	{ number = 13, name = "borderRadius", kind = "float" },
+	{ number = 14, name = "opacity", kind = "float", optional = true },
+	{ number = 15, name = "face", kind = "enum", enum = Face },
+	{ number = 16, name = "uppercase", kind = "bool" },
+	{ number = 17, name = "letterSpacing", kind = "float" },
+	{ number = 18, name = "shadow", kind = "bool" },
+	{ number = 19, name = "borderWidth", kind = "float" },
+	{ number = 20, name = "borderColor", kind = "fixed32" },
+	{ number = 21, name = "x", kind = "message", message = "Length" },
+	{ number = 22, name = "y", kind = "message", message = "Length" },
+	{ number = 23, name = "minWidth", kind = "message", message = "Length" },
+	{ number = 24, name = "maxWidth", kind = "message", message = "Length" },
+	{ number = 25, name = "minHeight", kind = "message", message = "Length" },
+	{ number = 26, name = "maxHeight", kind = "message", message = "Length" },
+	{ number = 27, name = "zIndex", kind = "int32" },
+	{ number = 28, name = "overflowX", kind = "enum", enum = Overflow },
+	{ number = 29, name = "overflowY", kind = "enum", enum = Overflow },
+	{ number = 30, name = "gradient", kind = "message", message = "Gradient" },
+	{ number = 31, name = "boxShadow", kind = "message", message = "Shadow" },
+	{ number = 32, name = "textShadow", kind = "message", message = "Shadow" },
+	{ number = 33, name = "tint", kind = "fixed32" },
+	{ number = 34, name = "saturation", kind = "float", optional = true },
+	{ number = 35, name = "brightness", kind = "float", optional = true },
+	{ number = 36, name = "contrast", kind = "float", optional = true },
+	{ number = 37, name = "blur", kind = "float" },
+	{ number = 38, name = "italic", kind = "bool" },
+	{ number = 39, name = "weight", kind = "enum", enum = Weight },
+	{ number = 40, name = "lineHeight", kind = "float" },
+	{ number = 41, name = "noWrap", kind = "bool" },
+	{ number = 42, name = "textOverflow", kind = "enum", enum = TextOverflow },
+	{ number = 43, name = "decoration", kind = "enum", enum = Decoration },
+	{ number = 44, name = "transform", kind = "message", message = "Transform" },
+	{ number = 45, name = "transition", kind = "message", message = "Transition" },
+}
+schema.Gradient = {
+	{ number = 1, name = "shape", kind = "enum", enum = GradientShape },
+	{ number = 2, name = "stops", kind = "message", repeated = true, message = "GradientStop" },
+}
+schema.GradientStop = {
+	{ number = 1, name = "at", kind = "float" },
+	{ number = 2, name = "color", kind = "fixed32" },
+}
+schema.Shadow = {
+	{ number = 1, name = "x", kind = "float" },
+	{ number = 2, name = "y", kind = "float" },
+	{ number = 3, name = "blur", kind = "float" },
+	{ number = 4, name = "spread", kind = "float" },
+	{ number = 5, name = "color", kind = "fixed32" },
+	{ number = 6, name = "inset", kind = "bool" },
+}
+schema.Transform = {
+	{ number = 1, name = "translateX", kind = "float" },
+	{ number = 2, name = "translateY", kind = "float" },
+	{ number = 3, name = "scaleX", kind = "float", optional = true },
+	{ number = 4, name = "scaleY", kind = "float", optional = true },
+	{ number = 5, name = "rotate", kind = "float" },
+	{ number = 6, name = "originX", kind = "float", optional = true },
+	{ number = 7, name = "originY", kind = "float", optional = true },
+}
+schema.Transition = {
+	{ number = 1, name = "seconds", kind = "float" },
+	{ number = 2, name = "delay", kind = "float" },
+	{ number = 3, name = "easing", kind = "enum", enum = Easing },
+}
+schema.Length = {
+	{ number = 1, name = "pixels", kind = "float", optional = true },
+	{ number = 2, name = "percent", kind = "float", optional = true },
+	{ number = 3, name = "fitChildren", kind = "bool", optional = true },
+	{ number = 4, name = "fill", kind = "float", optional = true },
+}
+schema.Edges = {
+	{ number = 1, name = "top", kind = "float" },
+	{ number = 2, name = "right", kind = "float" },
+	{ number = 3, name = "bottom", kind = "float" },
+	{ number = 4, name = "left", kind = "float" },
+}
+schema.Change = {
+	{ number = 1, name = "reset", kind = "bool" },
+	{ number = 2, name = "set", kind = "message", repeated = true, message = "Node" },
+	{ number = 3, name = "removed", kind = "string", repeated = true },
+	{ number = 4, name = "generation", kind = "uint64" },
 }
 schema.UiPressEvent = {
 	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
@@ -3362,6 +4098,10 @@ schema.UiInputEvent = {
 	{ number = 5, name = "on", kind = "bool", oneof = "value" },
 	{ number = 6, name = "choice", kind = "uint32", oneof = "value" },
 	{ number = 7, name = "wheel", kind = "message", oneof = "value", message = "Wheel" },
+}
+schema.UiRequest = {
+	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
+	{ number = 2, name = "change", kind = "message", message = "Change" },
 }
 schema.Call = {
 	{ number = 1, name = "method", kind = "string" },
@@ -3383,6 +4123,13 @@ schema.StartResult = {
 	{ number = 3, name = "damaged", kind = "bool" },
 	{ number = 4, name = "chat", kind = "bool" },
 	{ number = 5, name = "joins", kind = "bool" },
+	{ number = 6, name = "casts", kind = "bool" },
+	{ number = 7, name = "modifierEvents", kind = "string", repeated = true },
+	{ number = 8, name = "kills", kind = "bool" },
+	{ number = 9, name = "heals", kind = "bool" },
+	{ number = 10, name = "levels", kind = "bool" },
+	{ number = 11, name = "melees", kind = "bool" },
+	{ number = 12, name = "parries", kind = "bool" },
 }
 schema.FrameEvent = {
 	{ number = 1, name = "tick", kind = "uint64" },
@@ -3421,12 +4168,13 @@ schema.ServerCommandRequest = {
 	{ number = 1, name = "command", kind = "string" },
 }
 schema.PrecacheOptions = {
-	{ number = 1, name = "heroes", kind = "string", repeated = true },
+	{ number = 1, name = "heroes", kind = "string", repeated = true, resolve = heroName },
 	{ number = 2, name = "resources", kind = "string", repeated = true },
 }
 
--- readDefinitionField verifies a modifier definition's currently applied
--- float value. Unsupported hosts return no value.
+-- readDefinitionField reads the applied value of a definition's float
+-- field, such as one the manifest's definitions changed. Unsupported hosts
+-- return no value.
 function modlock.readDefinitionField(options: DefinitionFieldOptions): number?
 	local response = call("ReadDefinitionField", "DefinitionFieldOptions", options, "DefinitionFieldResponse")
 	if response == nil then
@@ -3633,6 +4381,18 @@ function modlock.modifierState(entity: number, state: string): boolean
 		return false
 	end
 	return response.active
+end
+
+-- modifiers lists every modifier an entity holds, such as the stun a
+-- hero's ultimate keeps on its target, with its name, class, caster,
+-- ability, age, time left and stacks. An entity that holds none answers an
+-- empty list.
+function modlock.modifiers(entity: number): { Modifier }
+	local response = call("Modifiers", "EntityRequest", { entity = entity }, "ModifiersResponse")
+	if response == nil then
+		return {}
+	end
+	return response.modifiers
 end
 
 -- holdModifierState holds a modifier state, such as
@@ -3977,6 +4737,22 @@ function modlock.watchProjectiles(options: ProjectileOptions): boolean
 	return call("WatchProjectiles", "ProjectileOptions", options) ~= nil
 end
 
+-- holdEntityModifier keeps a modifier, named as GiveModifier names it, on a
+-- live entity with no expiry, giving it back whenever the game removes it
+-- while the entity lives. The hold ends with the entity or when active is
+-- false.
+function modlock.holdEntityModifier(entity: number, modifier: string, active: boolean?): boolean
+	return call("HoldEntityModifier", "HoldEntityModifierRequest", { entity = entity, modifier = modifier, active = active }) ~= nil
+end
+
+-- giveEntityModifier gives a live entity, such as Npc.entity or Pawn.entity,
+-- a modifier for seconds. An ability's modifier, named
+-- "<ability>/<modifier>", resolves its parent ability subclass even when the
+-- entity owns no abilities.
+function modlock.giveEntityModifier(entity: number, modifier: string, seconds: number): boolean
+	return call("GiveEntityModifier", "GiveEntityModifierRequest", { entity = entity, modifier = modifier, seconds = seconds }) ~= nil
+end
+
 -- ModHandlers handles the events the game delivers to the mod.
 export type ModHandlers = {
 	-- start begins the mod's active lifetime, once, before any other event.
@@ -4003,6 +4779,27 @@ export type ModHandlers = {
 	-- damaged reports one hit the game applied, while the mod asked for
 	-- damage reports. Hits arrive before the next frame.
 	damaged: (event: DamagedEvent) -> (),
+	-- killed reports one hero or unit a hit killed, while the mod asked for
+	-- kills, after the hit's Damaged event and before the next frame.
+	killed: (event: KillEvent) -> (),
+	-- abilityCast reports one ability the game executed, while the mod asked
+	-- for casts, before the next frame.
+	abilityCast: (event: AbilityCastEvent) -> (),
+	-- modifierFired reports one modifier event the mod watches, before the
+	-- next frame.
+	modifierFired: (event: ModifierFiredEvent) -> (),
+	-- healed reports one heal, while the mod asked for heals, before the next
+	-- frame.
+	healed: (event: HealEvent) -> (),
+	-- levelChanged reports one hero reaching a new level, while the mod asked
+	-- for levels, before the next frame.
+	levelChanged: (event: LevelEvent) -> (),
+	-- melee reports one melee swing, while the mod asked for melees, before the
+	-- next frame.
+	melee: (event: MeleeEvent) -> (),
+	-- parried reports one parry that caught a swing, while the mod asked for
+	-- parries, before the next frame.
+	parried: (event: ParryEvent) -> (),
 	-- input reports one player's presses of watched buttons, before the next
 	-- frame. A block in place still withholds them from the hero.
 	input: (event: InputEvent) -> (),
@@ -4051,6 +4848,13 @@ local events: { [string]: { request: string, response: string, handler: string }
 	Serve = { request = "ServiceCall", response = "ServiceReply", handler = "serve" },
 	Damage = { request = "DamageEvent", response = "DamageResult", handler = "damage" },
 	Damaged = { request = "DamagedEvent", response = "Empty", handler = "damaged" },
+	Killed = { request = "KillEvent", response = "Empty", handler = "killed" },
+	AbilityCast = { request = "AbilityCastEvent", response = "Empty", handler = "abilityCast" },
+	ModifierFired = { request = "ModifierFiredEvent", response = "Empty", handler = "modifierFired" },
+	Healed = { request = "HealEvent", response = "Empty", handler = "healed" },
+	LevelChanged = { request = "LevelEvent", response = "Empty", handler = "levelChanged" },
+	Melee = { request = "MeleeEvent", response = "Empty", handler = "melee" },
+	Parried = { request = "ParryEvent", response = "Empty", handler = "parried" },
 	Input = { request = "InputEvent", response = "Empty", handler = "input" },
 	Restored = { request = "RestoredEvent", response = "Empty", handler = "restored" },
 	NpcsRestored = { request = "NpcsRestoredEvent", response = "Empty", handler = "npcsRestored" },
@@ -4178,6 +4982,169 @@ function modlock.setOrbitCamera(player: Player, enabled: boolean): boolean
 	return flag and zoom
 end
 
+-- Scores report a player's results to the boards a mod declares in mod.json
+-- and read those boards back, over the host's scores service. A host without
+-- the service, such as a server with no backend, takes no score; the mod
+-- logs each one instead, so its author sees what it would report.
+--
+--   modlock.reportScore(player, "trial.time", elapsedMs, { partition = { course = "canyon" }, key = runId })
+
+-- scoresService names the host service that keeps scores.
+local scoresService = "scores"
+
+-- BoardWindow is a span of time a board keeps standings for, in UTC; a week
+-- starts Monday.
+export type BoardWindow = "allTime" | "day" | "week"
+
+-- MatchOptions describe where a match ranks and the run it came from.
+export type MatchOptions = {
+	-- partition names a value for each of the board's partitions.
+	partition: { [string]: string }?,
+	-- key identifies the run, so a resent score counts once.
+	key: string?,
+	-- earnedAt is when the score was earned, in Unix milliseconds; the host's
+	-- clock by default.
+	earnedAt: number?,
+	-- evidence names what shows the run, such as a recording.
+	evidence: string?,
+}
+
+-- ScoreOptions describe where a score ranks and the run it came from.
+export type ScoreOptions = MatchOptions & {
+	-- tiebreak ranks equal values, lower first, such as fewer deaths.
+	tiebreak: number?,
+}
+
+-- MatchPlace is one player's finishing place in a match, 1 for the winner.
+export type MatchPlace = {
+	player: Player,
+	place: number,
+	-- value is the player's score in the match, for a board that keeps one.
+	value: number?,
+}
+
+-- BoardRead selects a page of a board.
+export type BoardRead = {
+	-- partition names a value for each of the board's partitions.
+	partition: { [string]: string }?,
+	-- window is one of the board's windows; all time by default.
+	window: BoardWindow?,
+	-- offset skips that many rows from the top.
+	offset: number?,
+	-- limit bounds the rows; ten by default.
+	limit: number?,
+	-- player asks for this player's own row too.
+	player: Player?,
+}
+
+-- BoardRow is one player's place on a board.
+export type BoardRow = {
+	rank: number,
+	-- steamId is the player's 64-bit Steam ID in decimal.
+	steamId: string,
+	name: string,
+	value: number,
+	tiebreak: number,
+	count: number,
+}
+
+-- BoardPage is a page of a board.
+export type BoardPage = {
+	-- rows are the standings in rank order.
+	rows: { BoardRow },
+	-- player is the asked player's row, when they hold a standing.
+	player: BoardRow?,
+	-- loading is set until the host has read the board; read again on a later
+	-- frame.
+	loading: boolean,
+}
+
+-- describePartition writes partition values as "[course=canyon]", in name
+-- order.
+local function describePartition(partition: { [string]: string }?): string
+	local names: { string } = {}
+	for name, value in partition or {} :: { [string]: string } do
+		table.insert(names, `{name}={value}`)
+	end
+	if #names == 0 then
+		return ""
+	end
+	table.sort(names)
+	return `[{table.concat(names, " ")}]`
+end
+
+-- taken calls a reporting method and logs line when the host takes no score.
+local function taken(method: string, report: string, line: string): boolean
+	if modlock.callService(scoresService, method, report) ~= nil then
+		return true
+	end
+	modlock.log(`score {line} (not reported: the host keeps no scores)`)
+	return false
+end
+
+-- reportScore reports one score for player to a board the manifest declares.
+-- It reports whether the host took it; a host without the scores service
+-- takes none, and the mod logs the score instead.
+function modlock.reportScore(player: Player, board: string, value: number, options: ScoreOptions?): boolean
+	local o: ScoreOptions = options or {}
+	local report = wire.encode(schema, "ScoreReport", {
+		board = board,
+		player = player,
+		value = math.round(value),
+		tiebreak = math.round(o.tiebreak or 0),
+		partition = o.partition,
+		key = o.key,
+		earnedAtUnixMillis = math.round(o.earnedAt or 0),
+		evidence = o.evidence,
+	})
+	return taken("Report", report, `{board}{describePartition(o.partition)}: player {player.slot} {value}`)
+end
+
+-- reportMatch reports one match's places to a rating or match board the
+-- manifest declares. Players who tie, such as one team's members, share a
+-- place. It reports whether the host took it, as reportScore does.
+function modlock.reportMatch(board: string, places: { MatchPlace }, options: MatchOptions?): boolean
+	-- Encode each place and the line the mod logs when the host takes none.
+	local o: MatchOptions = options or {}
+	local encoded, lines = {}, {}
+	for _, p in places do
+		table.insert(encoded, { player = p.player, place = p.place, value = math.round(p.value or 0) })
+		table.insert(lines, `player {p.player.slot} #{p.place}`)
+	end
+
+	-- Report the match.
+	local report = wire.encode(schema, "MatchReport", {
+		board = board,
+		places = encoded,
+		partition = o.partition,
+		key = o.key,
+		earnedAtUnixMillis = math.round(o.earnedAt or 0),
+		evidence = o.evidence,
+	})
+	return taken("Match", report, `{board}{describePartition(o.partition)}: {table.concat(lines, ", ")}`)
+end
+
+-- readBoard reads a page of a board the manifest declares, as the host last
+-- read it, or nil when the host serves no scores. A page the host has not
+-- read yet comes back loading.
+function modlock.readBoard(board: string, read: BoardRead?): BoardPage?
+	-- Ask the host for the page; a host without scores answers nothing.
+	local r: BoardRead = read or {}
+	local query = wire.encode(schema, "BoardQuery", {
+		board = board,
+		partition = r.partition,
+		window = r.window,
+		offset = r.offset,
+		limit = r.limit,
+		player = r.player,
+	})
+	local reply = modlock.callService(scoresService, "Read", query)
+	if reply == nil then
+		return nil
+	end
+	return wire.decode(schema, "BoardPage", reply) :: BoardPage
+end
+
 -- Service answers the host's calls to one service the mod serves: the
 -- method's name and payload in, the answer out. An error becomes the call's
 -- error.
@@ -4202,6 +5169,13 @@ local restoreds: { (player: Player, error: string?) -> () } = {}
 local npcsRestoreds: { (error: string?) -> () } = {}
 local damages: { (hit: DamageEvent) -> DamageResult? } = {}
 local damageds: { (hit: DamagedEvent) -> () } = {}
+local kills: { (kill: KillEvent) -> () } = {}
+local abilityCasts: { (cast: AbilityCastEvent) -> () } = {}
+local heals: { (heal: HealEvent) -> () } = {}
+local levels: { (change: LevelEvent) -> () } = {}
+local melees: { (swing: MeleeEvent) -> () } = {}
+local parries: { (parry: ParryEvent) -> () } = {}
+local modifierEvents: { [string]: { (event: ModifierFiredEvent) -> () } } = {}
 local launches: { (projectile: LaunchEvent) -> () } = {}
 local impacts: { (impact: ImpactEvent) -> () } = {}
 local landeds: { (landing: LandedEvent) -> () } = {}
@@ -4209,6 +5183,86 @@ local settingChanges: { (player: Player, key: string, value: string) -> () } = {
 
 -- roster is the player list the host last reported, or nil before one.
 local roster: { Connection }? = nil
+
+-- rosterWatchers hear each player list the host reports.
+local rosterWatchers: { (players: { Connection }) -> () } = {}
+
+-- generations holds each slot's connection generation in the last player
+-- list, so a new connection in a slot gets a new Player.
+local generations: { [number]: number } = {}
+
+-- adopt gives each connection in a player list its slot's Player. A slot
+-- whose connection changed since the last list gets a new Player, so a
+-- player who takes a slot another left is never == the one who left and
+-- never finds their table entry. Its contract rests on the host reporting
+-- the list before any event once it changed.
+local function adopt(players: { Connection }): { Connection }
+	-- Forget the Player of each slot whose connection left or was replaced.
+	local current: { [number]: number } = {}
+	for _, connection in players do
+		current[connection.player.slot] = connection.generation
+	end
+	for slot, generation in generations do
+		if current[slot] ~= generation then
+			Player.release(slot)
+		end
+	end
+	generations = current
+
+	-- Hand each connection its slot's Player, made anew where it was released.
+	local adopted: { Connection } = {}
+	for _, connection in players do
+		local player = Player.new(connection.player.slot)
+		if player ~= connection.player then
+			connection = table.clone(connection)
+			connection.player = player
+		end
+		table.insert(adopted, connection)
+	end
+	return adopted
+end
+
+-- Interface takes the events of the players' interfaces: the module that
+-- draws them, @modlock/ui, serves them with serveInterface, so the library
+-- loads without it.
+export type Interface = {
+	-- press takes a press on the button with id node, or on the ability bar.
+	press: (player: Player, node: string) -> (),
+	-- change takes a change to the input with id node, or a wheel step.
+	change: (player: Player, node: string, value: (string | number | boolean | Wheel)?) -> (),
+	-- tick takes the game clock at each frame, before the timers run.
+	tick: (seconds: number) -> (),
+	-- players takes each player list the host reports.
+	players: (players: { Connection }) -> (),
+}
+
+-- InterfaceWire is what serveInterface gives the interface module.
+export type InterfaceWire = {
+	-- send sends player's interface a change through the host and reports
+	-- whether the host took it.
+	send: (player: Player, change: any) -> boolean,
+	-- encode returns a node's wire encoding, to compare two nodes by.
+	encode: (node: any) -> string,
+}
+
+-- interface takes the interface events, once a module serves it.
+local interface: Interface? = nil
+
+-- serveInterface sends the players' interface events to served from now on
+-- and returns the calls the interface module sends its changes through. Mods
+-- draw interfaces through @modlock/ui, which calls it once as it loads.
+function modlock.serveInterface(served: Interface): InterfaceWire
+	interface = served
+	table.insert(rosterWatchers, served.players)
+	return {
+		send = function(player: Player, change: any): boolean
+			return call("Ui", "UiRequest", { player = player, change = change }) ~= nil
+		end,
+		encode = function(node: any): string
+			return wire.encode(schema, "Node", node)
+		end,
+	}
+end
 
 -- players lists the occupied player slots in slot order. It answers from the
 -- roster the host last reported, and asks the host until a report arrives.
@@ -4221,6 +5275,497 @@ function modlock.players(): { Connection }
 		return {}
 	end
 	return response.players
+end
+
+-- connection returns the connection of one player, given the player, their
+-- slot as a number or their Steam ID as a string: their name, Steam ID,
+-- whether they are a bot and whether they finished joining. It returns nil
+-- when nobody holds the slot or the account is not connected. Its player
+-- field is the Player to call.
+function modlock.connection(player: Player | number | string): Connection?
+	for _, held in roster or modlock.players() do
+		if type(player) == "string" then
+			if held.steamId == player then
+				return held
+			end
+		elseif held.player.slot == (if type(player) == "number" then player else player.slot) then
+			return held
+		end
+	end
+	return nil
+end
+
+-- Hero is one released hero.
+export type Hero = {
+	-- name is the game's name for the hero, such as "hero_atlas".
+	name: string,
+	-- id is the hero's fixed id, as Pawn.hero reads it.
+	id: number,
+	-- title is the name players read, such as "Abrams".
+	title: string,
+	-- portrait is the hero's small stock portrait, as an image's src.
+	portrait: string,
+}
+
+-- heroes lists every released hero alphabetically by title. The table
+-- follows the game's hero data; a hero the game adds or releases joins it in
+-- a Modlock release.
+local heroes: { Hero } = {
+	{ name = "hero_atlas", id = 6, title = "Abrams", portrait = "file://{images}/heroes/bull_sm.psd" },
+	{ name = "hero_fencer", id = 77, title = "Apollo", portrait = "file://{images}/heroes/fencer_sm.psd" },
+	{ name = "hero_baba", id = 88, title = "Baba", portrait = "file://{images}/heroes/baba_sm.psd" },
+	{ name = "hero_bebop", id = 15, title = "Bebop", portrait = "file://{images}/heroes/bebop_sm.psd" },
+	{ name = "hero_punkgoat", id = 72, title = "Billy", portrait = "file://{images}/heroes/punkgoat_sm.psd" },
+	{ name = "hero_nano", id = 16, title = "Calico", portrait = "file://{images}/heroes/nano_sm.psd" },
+	{ name = "hero_unicorn", id = 81, title = "Celeste", portrait = "file://{images}/heroes/unicorn_sm.psd" },
+	{ name = "hero_deadpack", id = 78, title = "Deadman Danny", portrait = "file://{images}/heroes/deadpack_sm.psd" },
+	{ name = "hero_drifter", id = 64, title = "Drifter", portrait = "file://{images}/heroes/drifter_sm.psd" },
+	{ name = "hero_dynamo", id = 11, title = "Dynamo", portrait = "file://{images}/heroes/sumo_sm.psd" },
+	{ name = "hero_necro", id = 76, title = "Graves", portrait = "file://{images}/heroes/necro_sm.psd" },
+	{ name = "hero_orion", id = 17, title = "Grey Talon", portrait = "file://{images}/heroes/archer_sm.psd" },
+	{ name = "hero_haze", id = 13, title = "Haze", portrait = "file://{images}/heroes/haze_sm.psd" },
+	{ name = "hero_astro", id = 14, title = "Holliday", portrait = "file://{images}/heroes/astro_sm.psd" },
+	{ name = "hero_inferno", id = 1, title = "Infernus", portrait = "file://{images}/heroes/inferno_sm.psd" },
+	{ name = "hero_tengu", id = 20, title = "Ivy", portrait = "file://{images}/heroes/tengu_sm.psd" },
+	{ name = "hero_kelvin", id = 12, title = "Kelvin", portrait = "file://{images}/heroes/kelvin_sm.psd" },
+	{ name = "hero_ghost", id = 4, title = "Lady Geist", portrait = "file://{images}/heroes/spectre_sm.psd" },
+	{ name = "hero_lash", id = 31, title = "Lash", portrait = "file://{images}/heroes/lash_sm.psd" },
+	{ name = "hero_forge", id = 8, title = "McGinnis", portrait = "file://{images}/heroes/engineer_sm.psd" },
+	{ name = "hero_vampirebat", id = 63, title = "Mina", portrait = "file://{images}/heroes/vampirebat_sm.psd" },
+	{ name = "hero_mirage", id = 52, title = "Mirage", portrait = "file://{images}/heroes/mirage_sm.psd" },
+	{ name = "hero_krill", id = 18, title = "Mo & Krill", portrait = "file://{images}/heroes/digger_sm.psd" },
+	{ name = "hero_nurse", id = 87, title = "Nurse Harrow", portrait = "file://{images}/heroes/nurse_sm.psd" },
+	{ name = "hero_bookworm", id = 67, title = "Paige", portrait = "file://{images}/heroes/bookworm_sm.psd" },
+	{ name = "hero_chrono", id = 10, title = "Paradox", portrait = "file://{images}/heroes/chrono_sm.psd" },
+	{ name = "hero_synth", id = 50, title = "Pocket", portrait = "file://{images}/heroes/synth_sm.psd" },
+	{ name = "hero_ratking", id = 84, title = "Rat King", portrait = "file://{images}/heroes/ratking_sm.psd" },
+	{ name = "hero_familiar", id = 79, title = "Rem", portrait = "file://{images}/heroes/familiar_sm.psd" },
+	{ name = "hero_gigawatt", id = 2, title = "Seven", portrait = "file://{images}/heroes/gigawatt_sm.psd" },
+	{ name = "hero_shiv", id = 19, title = "Shiv", portrait = "file://{images}/heroes/shiv_sm.psd" },
+	{ name = "hero_werewolf", id = 80, title = "Silver", portrait = "file://{images}/heroes/werewolf_sm.psd" },
+	{ name = "hero_magician", id = 60, title = "Sinclair", portrait = "file://{images}/heroes/magician_sm.psd" },
+	{ name = "hero_chessmaster", id = 85, title = "Solomon", portrait = "file://{images}/heroes/chessmaster_sm.psd" },
+	{ name = "hero_doorman", id = 69, title = "The Doorman", portrait = "file://{images}/heroes/doorman_sm.psd" },
+	{ name = "hero_priest", id = 65, title = "Venator", portrait = "file://{images}/heroes/priest_sm.psd" },
+	{ name = "hero_frank", id = 66, title = "Victor", portrait = "file://{images}/heroes/frank_sm.psd" },
+	{ name = "hero_hornet", id = 3, title = "Vindicta", portrait = "file://{images}/heroes/hornet_sm.png" },
+	{ name = "hero_artist", id = 86, title = "Violet", portrait = "file://{images}/heroes/artist_sm.psd" },
+	{ name = "hero_viscous", id = 35, title = "Viscous", portrait = "file://{images}/heroes/viscous_sm.psd" },
+	{ name = "hero_viper", id = 58, title = "Vyper", portrait = "file://{images}/heroes/kali_sm.psd" },
+	{ name = "hero_warden", id = 25, title = "Warden", portrait = "file://{images}/heroes/warden_sm.psd" },
+	{ name = "hero_wraith", id = 7, title = "Wraith", portrait = "file://{images}/heroes/wraith_sm.psd" },
+	{ name = "hero_yamato", id = 27, title = "Yamato", portrait = "file://{images}/heroes/yamato_sm.psd" },
+}
+modlock.heroes = heroes
+
+-- plainTitle is a hero's title in lower case without spaces or punctuation.
+local function plainTitle(hero: Hero): string
+	return (string.gsub(string.lower(hero.title), "[^a-z0-9]", ""))
+end
+
+-- heroesByName holds each released hero under every name heroNamed accepts,
+-- reduced as heroNamed reduces them. Game names go in last, so a title that
+-- equals another hero's game name could never take it.
+local heroesByName: { [string]: Hero } = {}
+for _, hero in heroes do
+	heroesByName[plainTitle(hero)] = hero
+end
+for _, hero in heroes do
+	heroesByName[string.sub(hero.name, #"hero_" + 1)] = hero
+	heroesByName[hero.name] = hero
+end
+
+-- heroNamed returns the released hero that name names exactly: its game name,
+-- such as "hero_nano", that name without "hero_", such as "nano", or its
+-- title in any case, with or without spaces and punctuation, such as "Calico"
+-- or "ladygeist". Unlike findHero it matches no part of a name, so a
+-- misspelled name finds no hero rather than another one.
+function modlock.heroNamed(name: string): Hero?
+	return heroesByName[(string.gsub(string.lower(name), "[^a-z0-9_]", ""))]
+end
+heroNamed = modlock.heroNamed
+
+-- findHero matches what a player typed, such as "geist", "Lady Geist" or
+-- "hero_ghost", to a hero: an exact game name or title first, then the first
+-- title that starts with or contains it.
+function modlock.findHero(typed: string): Hero?
+	-- Reduce what was typed to letters, digits and underscores.
+	local key = string.gsub(string.lower(typed), "[^a-z0-9_]", "")
+	if key == "" then
+		return nil
+	end
+
+	-- Compare it with each name and plain title.
+	for _, hero in heroes do
+		if hero.name == key or plainTitle(hero) == key then
+			return hero
+		end
+	end
+	for _, hero in heroes do
+		if string.sub(plainTitle(hero), 1, #key) == key then
+			return hero
+		end
+	end
+	for _, hero in heroes do
+		if string.find(plainTitle(hero), key, 1, true) then
+			return hero
+		end
+	end
+	return nil
+end
+
+-- Want is what a member's hero should be; each field it leaves out is free.
+export type Want = {
+	-- hero seats the member on a hero: its name as players know it or as the
+	-- game does, such as "Calico" or "hero_nano", its id, or "any" for the hero
+	-- they have or else a random one.
+	hero: (string | number)?,
+	-- team is the team, 2 or 3, to seat the member on. Without one a member
+	-- keeps their hero's team, or else joins the side with fewer heroes.
+	team: number?,
+	-- respawn is the seconds a fallen hero waits before Cast asks for it back.
+	respawn: number?,
+}
+
+-- CastOptions are a mode's answers to its players coming and going.
+export type CastOptions<M> = {
+	-- join makes the member for a human who finished joining.
+	join: (connection: Connection) -> M,
+	-- leave ends a member whose connection left the slot.
+	leave: ((member: M, connection: Connection) -> ())?,
+	-- want is what every member wants, or a function that returns what one
+	-- member wants now. Cast calls it once per member each frame, so it should
+	-- return a want it keeps rather than make a new one.
+	want: (Want | (member: M) -> Want)?,
+	-- bots says what to do with a bot: skip leaves it out of the cast, join
+	-- makes it a member as a human is, and kick asks the server to remove it,
+	-- once per connection. Skip is the default.
+	bots: ("skip" | "join" | "kick")?,
+}
+
+-- Cast keeps a mode's players: one member for each human who finished
+-- joining, made by the mode's join and ended by its leave. Members are keyed
+-- by slot and connection generation, so a reconnect is a leave and a join.
+-- Cast learns of joins and leaves from the host's player reports and settles
+-- them on the next frame; it never walks the player list on a frame where
+-- nothing changed.
+--
+-- A member may carry a want: to sit on a hero and team, and to come back a
+-- while after its hero falls. The mode gives one want for every member or a
+-- function that reads it from the member each frame, so a want follows the
+-- member's own state. A human whose want leaves the hero free still gets one
+-- when the game leaves them on a team without a hero, as its own spawn on
+-- joining can, since nothing else would ever seat them. Each frame Cast
+-- compares the want with what the member's hero shows, asks the game again at
+-- most once a second while they differ, and stops asking once they match.
+-- That is a reconciliation loop: a lost or refused ask is only asked again,
+-- never reported as a failure.
+--
+-- A frame costs one pawn read per member, which the mode reads back with
+-- pawn instead of asking the game again.
+export type Cast<M> = {
+	-- size returns the number of members.
+	size: (self: Cast<M>) -> number,
+	-- members lists the members in the order they joined.
+	members: (self: Cast<M>) -> { M },
+	-- get returns the member in player's slot, if any.
+	get: (self: Cast<M>, player: Player) -> M?,
+	-- pawn returns the member's hero as Cast read it this frame.
+	pawn: (self: Cast<M>, player: Player) -> Pawn?,
+	-- frame settles the joins and leaves reported since the last frame, reads
+	-- each member's hero, and asks the game once a second for any want it does
+	-- not show yet. seconds is the game clock.
+	frame: (self: Cast<M>, seconds: number) -> (),
+}
+
+-- Seat is one member with what Cast last saw of their hero.
+type Seat<M> = {
+	-- connection is the member's connection, whose generation keys the seat.
+	connection: Connection,
+	-- member is what the mode's join made.
+	member: M,
+	-- pawn is the member's hero this frame.
+	pawn: Pawn?,
+	-- alive is whether the member's hero stood with health this frame.
+	alive: boolean,
+	-- fellAt is when Cast last saw the hero fall.
+	fellAt: number,
+	-- hero is the member's hero last frame, or 0 without one.
+	hero: number,
+	-- heroLostAt is when the member last went from a hero to none.
+	heroLostAt: number,
+	-- joinedAt is when the member joined.
+	joinedAt: number,
+	-- askedAt is when Cast last asked the game for the want.
+	askedAt: number,
+}
+
+-- CastState is a Cast with the state its methods keep.
+type CastState<M> = Cast<M> & {
+	-- options are the mode's answers.
+	options: CastOptions<M>,
+	-- seats maps each member's slot to their seat.
+	seats: { [number]: Seat<M> },
+	-- order holds the seats in the order their members joined.
+	order: { Seat<M> },
+	-- kicked holds the connection generation each kicked bot's slot had.
+	kicked: { [number]: number },
+	-- reported is the player list the host reported since the last frame.
+	reported: { Connection }?,
+}
+
+-- changeSeconds is how long Cast leaves a member without a hero after they
+-- had one, or after they joined when their hero is free. The game's own
+-- Change Hero removes the hero before it spawns the new one, and seating the
+-- member in that gap would override their pick.
+local changeSeconds = 3
+
+-- noWant leaves a member's hero free.
+local noWant: Want = {}
+
+local Cast = {}
+Cast.__index = Cast
+modlock.Cast = Cast
+
+-- new returns a Cast that keeps one member per human player from now on,
+-- starting with the players the host last reported.
+function Cast.new<M>(options: CastOptions<M>): Cast<M>
+	local cast = {
+		options = options,
+		seats = {},
+		order = {},
+		kicked = {},
+		reported = roster,
+	}
+	table.insert(rosterWatchers, function(players: { Connection })
+		cast.reported = players
+	end)
+	return setmetatable(cast, Cast) :: any
+end
+
+-- size returns the number of members.
+function Cast.size<M>(self: CastState<M>): number
+	return #self.order
+end
+
+-- members lists the members in the order they joined.
+function Cast.members<M>(self: CastState<M>): { M }
+	local members: { M } = {}
+	for _, seat in self.order do
+		table.insert(members, seat.member)
+	end
+	return members
+end
+
+-- get returns the member in player's slot, if any.
+function Cast.get<M>(self: CastState<M>, player: Player): M?
+	local seat = self.seats[player.slot]
+	return if seat then seat.member else nil
+end
+
+-- pawn returns the member's hero as Cast read it this frame.
+function Cast.pawn<M>(self: CastState<M>, player: Player): Pawn?
+	local seat = self.seats[player.slot]
+	return if seat then seat.pawn else nil
+end
+
+-- kick asks the server to remove a bot, once per connection.
+local function kick<M>(cast: CastState<M>, connection: Connection)
+	local slot = connection.player.slot
+	if cast.kicked[slot] == connection.generation then
+		return
+	end
+	cast.kicked[slot] = connection.generation
+	modlock.serverCommand(`kick "{connection.name}"`)
+end
+
+-- settle ends the members whose connection left and makes the new ones,
+-- joined at now.
+local function settle<M>(cast: CastState<M>, players: { Connection }, now: number)
+	-- A member leaves when their slot empties or a new connection takes it.
+	local present: { [number]: number } = {}
+	for _, connection in players do
+		present[connection.player.slot] = connection.generation
+	end
+	for _, seat in table.clone(cast.order) do
+		local slot = seat.connection.player.slot
+		if present[slot] == seat.connection.generation then
+			continue
+		end
+		cast.seats[slot] = nil
+		table.remove(cast.order, table.find(cast.order, seat))
+		local leave = cast.options.leave
+		if leave then
+			leave(seat.member, seat.connection)
+		end
+	end
+
+	-- A human who finished joining becomes a member, and a bot as the
+	-- policy says.
+	local bots = cast.options.bots or "skip"
+	for _, connection in players do
+		local slot = connection.player.slot
+		if not connection.ready or cast.seats[slot] ~= nil then
+			continue
+		end
+		if connection.bot and bots ~= "join" then
+			if bots == "kick" then
+				kick(cast, connection)
+			end
+			continue
+		end
+		local seat: Seat<M> = {
+			connection = connection,
+			member = cast.options.join(connection),
+			pawn = nil,
+			alive = false,
+			fellAt = -math.huge,
+			hero = 0,
+			heroLostAt = -math.huge,
+			joinedAt = now,
+			askedAt = -math.huge,
+		}
+		cast.seats[slot] = seat
+		table.insert(cast.order, seat)
+	end
+end
+
+-- stranded returns "any" for a human whose hero is free when the game has
+-- left them on a team without one for changeSeconds since they joined, and
+-- otherwise leaves the hero free. Such a pawn never gets a hero on its own,
+-- while a player still choosing one has no pawn and a spectator stands on
+-- team 1. A bot is left to the game, which seats it.
+local function stranded<M>(seat: Seat<M>, now: number): string?
+	local pawn = seat.pawn
+	local heroless = pawn ~= nil and pawn.hero == 0 and (pawn.team == 2 or pawn.team == 3)
+	return if heroless and not seat.connection.bot and now - seat.joinedAt >= changeSeconds
+		then "any"
+		else nil
+end
+
+-- wantOf is what the member in seat wants now.
+local function wantOf<M>(cast: CastState<M>, seat: Seat<M>): Want
+	local want = cast.options.want
+	if want == nil then
+		return noWant
+	end
+	if type(want) == "function" then
+		return want(seat.member)
+	end
+	return want
+end
+
+-- seated reports whether the member's hero shows the hero and team they want.
+local function seated<M>(seat: Seat<M>, want: Want, hero: string | number): boolean
+	-- A member needs a hero on the team they want before the hero counts.
+	local pawn = seat.pawn
+	if pawn == nil or pawn.hero == 0 then
+		return false
+	end
+	if want.team ~= nil and pawn.team ~= want.team then
+		return false
+	end
+	if hero == "any" then
+		return true
+	end
+
+	-- A name outside the released heroes, such as one the game added since,
+	-- is met by whatever hero the game gave for it.
+	local known = if type(hero) == "string" then modlock.heroNamed(hero) else nil
+	local id = if type(hero) == "number" then hero elseif known then known.id else nil
+	return id == nil or pawn.hero == id
+end
+
+-- side is the team a member joins: their hero's, or the one with fewer heroes.
+local function side<M>(cast: CastState<M>, seat: Seat<M>): number
+	-- A hero keeps its team. The game puts each connecting player on a team
+	-- before they have a hero, so a member without one is counted afresh.
+	local pawn = seat.pawn
+	if pawn ~= nil and pawn.hero ~= 0 and (pawn.team == 2 or pawn.team == 3) then
+		return pawn.team
+	end
+
+	-- Count the other members' heroes on each team.
+	local amber, sapphire = 0, 0
+	for _, other in cast.order do
+		local theirs = other.pawn
+		if other == seat or theirs == nil or theirs.hero == 0 then
+			continue
+		end
+		if theirs.team == 2 then
+			amber += 1
+		elseif theirs.team == 3 then
+			sapphire += 1
+		end
+	end
+	return if sapphire < amber then 3 else 2
+end
+
+-- seatHero asks the game to put the member on hero and their team.
+local function seatHero<M>(cast: CastState<M>, seat: Seat<M>, want: Want, hero: string | number)
+	-- Any hero keeps the one the member has, or else takes a random one.
+	local pawn = seat.pawn
+	local pick: string | number = hero
+	if hero == "any" then
+		pick = if pawn ~= nil and pawn.hero ~= 0 then pawn.hero else heroes[math.random(#heroes)].name
+	end
+	seat.connection.player:selectHero(pick, if want.team ~= nil then want.team else side(cast, seat))
+end
+
+-- reconcile reads a member's hero and asks for the part of the want it lacks.
+local function reconcile<M>(cast: CastState<M>, seat: Seat<M>, now: number)
+	-- Note when the hero falls.
+	local pawn = seat.connection.player:pawn()
+	local alive = pawn ~= nil and pawn.hero ~= 0 and pawn.health > 0
+	if seat.alive and not alive then
+		seat.fellAt = now
+	end
+	seat.pawn = pawn
+	seat.alive = alive
+
+	-- Note when a member who had a hero is left without one, so a hero change
+	-- the game is making finishes before Cast seats them again.
+	local had = if pawn ~= nil then pawn.hero else 0
+	if had == 0 and seat.hero ~= 0 then
+		seat.heroLostAt = now
+	end
+	seat.hero = had
+	local changing = had == 0 and now - seat.heroLostAt < changeSeconds
+
+	-- Ask at most once a second, first for the seat, then for the hero back.
+	if now - seat.askedAt < 1 or changing then
+		return
+	end
+	local want = wantOf(cast, seat)
+	local respawn = want.respawn
+	local hero: (string | number)? = want.hero
+	if hero == nil then
+		hero = stranded(seat, now)
+	end
+	if hero ~= nil and not seated(seat, want, hero) then
+		seat.askedAt = now
+		seatHero(cast, seat, want, hero)
+	elseif respawn ~= nil and pawn ~= nil and pawn.hero ~= 0 and not alive and now - seat.fellAt >= respawn then
+		seat.askedAt = now
+		seat.connection.player:respawn()
+	end
+end
+
+-- frame settles the joins and leaves reported since the last frame, reads
+-- each member's hero, and asks the game once a second for any want it does
+-- not show yet. seconds is the game clock.
+function Cast.frame<M>(self: CastState<M>, seconds: number)
+	-- Settle the player list the host reported since the last frame.
+	local reported = self.reported
+	if reported ~= nil then
+		settle(self, reported, seconds)
+		self.reported = nil
+	end
+
+	-- Reconcile each member's hero with their want.
+	for _, seat in self.order do
+		reconcile(self, seat, seconds)
+	end
 end
 
 -- serve answers the host's calls to service with handler, replacing its
@@ -4435,9 +5980,199 @@ function modlock.onPlayerLeave(handler: (left: PlayerLeftEvent) -> ())
 	table.insert(leaves, handler)
 end
 
+-- Seating is the hero and team seat gives one player.
+export type Seating = {
+	-- hero is the hero's name as players know it or as the game does, such as
+	-- "Calico" or "hero_nano", its id, or "any" for the hero the player has or
+	-- else a random one. "any" is the default.
+	hero: (string | number)?,
+	-- team is the team, 2 or 3. Without one the player keeps their hero's team
+	-- or joins the side with fewer heroes.
+	team: number?,
+}
+
+-- wishes holds what each seated player wants by slot, with the generation of
+-- the connection it was asked for, so a wish never passes to the next player
+-- in the slot.
+local wishes: { [number]: { generation: number, want: Want } } = {}
+
+-- unseated is the want of a player the mod did not seat: only the respawn
+-- delay.
+local unseated: Want = {}
+
+-- seating is the Cast that seats players, once the mod uses seating.
+local seating: Cast<Connection>? = nil
+
+-- startSeating makes the seating Cast and runs it with the mod's frames. Bots
+-- are members, so the mod can seat one and the respawn delay brings theirs
+-- back too. It starts with the first seat or respawn delay, so a mod that uses
+-- neither pays nothing.
+local function startSeating()
+	if seating then
+		return
+	end
+	local cast: Cast<Connection> = Cast.new({
+		join = function(connection: Connection): Connection
+			return connection
+		end,
+		leave = function(member: Connection)
+			local held = wishes[member.player.slot]
+			if held and held.generation == member.generation then
+				wishes[member.player.slot] = nil
+			end
+		end,
+		want = function(member: Connection): Want
+			local held = wishes[member.player.slot]
+			if held and held.generation == member.generation then
+				return held.want
+			end
+			return unseated
+		end,
+		bots = "join",
+	})
+	seating = cast
+	table.insert(frames, function(frame: FrameEvent)
+		cast:frame(frame.timeSeconds)
+	end)
+end
+
+-- connection returns the player's connection: their name, Steam ID, whether
+-- they are a bot and whether they finished joining. It returns nil when
+-- nobody holds the slot.
+function Player.connection(self: Player): Connection?
+	return modlock.connection(self)
+end
+
+-- seat gives the player a hero on a team, skipping the game's team and hero
+-- screens. Call it as the player joins:
+--
+--     modlock.onPlayerJoin(function(joined)
+--         joined.connection.player:seat({ hero = "haze", team = 2 })
+--     end)
+--
+-- The hero appears on a later frame, and onSpawn hears of it. The library asks
+-- the game again until the player has the seat, and once more after the player
+-- changes hero, so a call before the game is ready is not lost. Seating the
+-- player again replaces the seat, and it ends when they leave. It returns
+-- false when nobody holds the player's slot.
+function Player.seat(self: Player, options: Seating?): boolean
+	local held = modlock.connection(self)
+	if not held then
+		return false
+	end
+	local chosen: Seating = options or {}
+	wishes[self.slot] = {
+		generation = held.generation,
+		want = { hero = chosen.hero or "any", team = chosen.team, respawn = unseated.respawn },
+	}
+	startSeating()
+	return true
+end
+
+-- setRespawnDelay brings every fallen hero back after seconds, in place of the
+-- game's own respawn time. Without seconds it leaves fallen heroes to the game
+-- again.
+function modlock.setRespawnDelay(seconds: number?)
+	unseated = { respawn = seconds }
+	for _, held in wishes do
+		held.want = { hero = held.want.hero, team = held.want.team, respawn = seconds }
+	end
+	startSeating()
+end
+
+-- spawns holds the spawn handlers, which run in registration order.
+local spawns: { (player: Player, pawn: Pawn) -> () } = {}
+
+-- respawnedEvent is the game's modifier event for a hero entering play.
+local respawnedEvent = "PLAYER_RESPAWNED"
+
+-- frameCount counts frames, so spawnedAt can tell one frame's events apart.
+local frameCount = 0
+
+-- spawnedAt maps each slot to the frame the spawn handlers last heard of its
+-- hero; the game repeats the event as a player's hero is built.
+local spawnedAt: { [number]: number } = {}
+
+-- onSpawn calls handler each time a player's hero enters play: their first
+-- hero after joining, and each respawn. The
+-- player has a hero to move, equip and read from then on, which onPlayerJoin
+-- does not promise. The library hears it from the game's PLAYER_RESPAWNED
+-- event, before the frame handlers run.
+function modlock.onSpawn(handler: (player: Player, pawn: Pawn) -> ())
+	table.insert(spawns, handler)
+end
+
+-- respawned tells the spawn handlers that the player's hero entered play.
+local function respawned(player: Player)
+	-- Skip a placeholder pawn, which has hero 0, and a hero already told of this frame.
+	local pawn = if player.slot < 0 then nil else player:pawn()
+	if not pawn or pawn.hero == 0 or pawn.health <= 0 then
+		return
+	end
+	if spawnedAt[player.slot] == frameCount then
+		return
+	end
+	spawnedAt[player.slot] = frameCount
+	for _, handler in spawns do
+		handler(player, pawn)
+	end
+end
+
 -- onDamaged calls handler on the frame after each hit lands.
 function modlock.onDamaged(handler: (hit: DamagedEvent) -> ())
 	table.insert(damageds, handler)
+end
+
+-- onKill calls handler after each hit that kills a hero or a unit, before the
+-- next frame. The kill names both entities and the player of each: a slot of
+-- -1 is a unit's, or a hazard's for the attacker.
+function modlock.onKill(handler: (kill: KillEvent) -> ())
+	table.insert(kills, handler)
+end
+
+-- onHeal calls handler after each heal, before the next frame: health a hero
+-- or unit regained at once from an ability, an item or lifesteal. Regeneration
+-- calls nothing, including what abilities such as Siphon Life restore as
+-- regeneration, and neither do the mod's own heal and a heal at full health.
+-- The heal names the entity healed, the healer and ability when the game
+-- names them, and the player of each: a slot of -1 is a unit's, or no one's.
+function modlock.onHeal(handler: (heal: HealEvent) -> ())
+	table.insert(heals, handler)
+end
+
+-- onLevelChange calls handler as each hero reaches a new level, before the
+-- next frame.
+function modlock.onLevelChange(handler: (change: LevelEvent) -> ())
+	table.insert(levels, handler)
+end
+
+-- onMelee calls handler after each melee swing, before the next frame, with
+-- whether it was heavy and the entities it struck, none for a miss.
+function modlock.onMelee(handler: (swing: MeleeEvent) -> ())
+	table.insert(melees, handler)
+end
+
+-- onParry calls handler after each parry that catches a melee swing, before
+-- the next frame, naming the hero that parried and the attacker it caught.
+function modlock.onParry(handler: (parry: ParryEvent) -> ())
+	table.insert(parries, handler)
+end
+
+-- onAbilityCast calls handler after each ability the game executes, before
+-- the next frame: a hero's abilities and the items a player activates, at
+-- the moment the cast takes effect.
+function modlock.onAbilityCast(handler: (cast: AbilityCastEvent) -> ())
+	table.insert(abilityCasts, handler)
+end
+
+-- onModifierEvent calls handler each time the game fires the modifier event
+-- with this EModifierEvent name, such as ABILITY_CAST_STARTED, PARRY_SUCCESS
+-- or PLAYER_RESPAWNED, before the next frame. Register before the mod
+-- starts. A name the running game lacks is logged once and never fires.
+function modlock.onModifierEvent(name: string, handler: (event: ModifierFiredEvent) -> ())
+	local named = modifierEvents[name] or {}
+	table.insert(named, handler)
+	modifierEvents[name] = named
 end
 
 -- onLaunch calls handler with each watched projectile's first frame, before
@@ -4471,6 +6206,15 @@ local handlers: ModHandlers = {
 		for _, handler in starts do
 			handler(event.args)
 		end
+		-- Name the modifier events the mod listens to.
+		local watched: { string } = {}
+		for name in modifierEvents do
+			table.insert(watched, name)
+		end
+		if #spawns ~= 0 and not modifierEvents[respawnedEvent] then
+			table.insert(watched, respawnedEvent)
+		end
+
 		-- Timers run from frames, so the library always takes them.
 		return {
 			frames = true,
@@ -4478,11 +6222,22 @@ local handlers: ModHandlers = {
 			damaged = #damageds ~= 0,
 			chat = #chats ~= 0,
 			joins = #joins ~= 0 or #leaves ~= 0,
+			casts = #abilityCasts ~= 0,
+			kills = #kills ~= 0,
+			heals = #heals ~= 0,
+			levels = #levels ~= 0,
+			melees = #melees ~= 0,
+			parries = #parries ~= 0,
+			modifierEvents = watched,
 		}
 	end,
 
 	frame = function(event)
+		if interface then
+			interface.tick(event.timeSeconds)
+		end
 		advanceTimers(event.timeSeconds)
+		frameCount += 1
 		for _, handler in frames do
 			handler(event)
 		end
@@ -4522,10 +6277,24 @@ local handlers: ModHandlers = {
 		end
 	end,
 
-	-- Luau mods build no interface yet, so no button reports a press and no
-	-- input a change.
-	uiPress = function(_event) end,
-	uiInput = function(_event) end,
+	-- A press or a change arrives under the same CPU budget as a command, so
+	-- the interface's handlers run with the next frame.
+	uiPress = function(event)
+		local served = interface
+		if served then
+			modlock.after(0, function()
+				served.press(event.player, event.node)
+			end)
+		end
+	end,
+	uiInput = function(event)
+		local served = interface
+		if served then
+			modlock.after(0, function()
+				served.change(event.player, event.node, event.value)
+			end)
+		end
+	end,
 
 	serve = function(event)
 		local handler = services[event.service]
@@ -4555,6 +6324,51 @@ local handlers: ModHandlers = {
 
 	damaged = function(event)
 		for _, handler in damageds do
+			handler(event)
+		end
+	end,
+
+	killed = function(event)
+		for _, handler in kills do
+			handler(event)
+		end
+	end,
+
+	abilityCast = function(event)
+		for _, handler in abilityCasts do
+			handler(event)
+		end
+	end,
+
+	healed = function(event)
+		for _, handler in heals do
+			handler(event)
+		end
+	end,
+
+	levelChanged = function(event)
+		for _, handler in levels do
+			handler(event)
+		end
+	end,
+
+	melee = function(event)
+		for _, handler in melees do
+			handler(event)
+		end
+	end,
+
+	parried = function(event)
+		for _, handler in parries do
+			handler(event)
+		end
+	end,
+
+	modifierFired = function(event)
+		if event.name == respawnedEvent and #spawns ~= 0 then
+			respawned(event.player)
+		end
+		for _, handler in modifierEvents[event.name] or {} do
 			handler(event)
 		end
 	end,
@@ -4602,7 +6416,11 @@ local handlers: ModHandlers = {
 	end,
 
 	playersChanged = function(event)
-		roster = event.players
+		local players = adopt(event.players)
+		roster = players
+		for _, watcher in rosterWatchers do
+			watcher(players)
+		end
 	end,
 
 	-- A join and a leave run at once, so the leaving player's hero still reads.

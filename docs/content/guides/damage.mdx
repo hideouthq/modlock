@@ -1,0 +1,185 @@
+---
+title: Damage
+description: Change or block a hit before it lands, and react to it after.
+---
+
+Your mod can handle two events for each hit. `onDamage` fires before the game
+applies the damage, and your handler can change the amount or block the hit.
+`onDamaged` fires after, and tells your handler the health the victim had and
+the health the hit took. Both events give the attacker and the victim as
+entity numbers, the same number that is in a pawn's `entity` field.
+
+## Change a hit
+
+To change a hit, return its new amount from your `onDamage` handler. When your
+handler returns nothing, the hit lands as the game dealt it.
+
+<Samples>
+
+```ts
+import { onDamage } from 'modlock'
+
+// Headshots deal double damage.
+onDamage((hit) => (hit.hitGroup === 1 ? { amount: hit.amount * 2 } : undefined))
+```
+
+```luau
+-- Headshots deal double damage.
+modlock.onDamage(function(hit)
+	if hit.hitGroup == 1 then
+		return { amount = hit.amount * 2 }
+	end
+	return nil
+end)
+```
+
+```python
+# Headshots deal double damage.
+@modlock.on_damage
+def headshots(hit: modlock.DamageEvent) -> modlock.DamageResult | None:
+    if hit.hit_group == 1:
+        return modlock.DamageResult(amount=hit.amount * 2)
+    return None
+```
+
+```go
+// Headshots deal double damage.
+mod.OnDamage(func(hit *mod.DamageEvent) *mod.DamageResult {
+	if hit.GetHitGroup() != 1 {
+		return nil
+	}
+	amount := hit.GetAmount() * 2
+	return &mod.DamageResult{Amount: &amount}
+})
+```
+
+</Samples>
+
+## Block a hit
+
+When your `onDamage` handler returns `block`, the hit deals no damage. Modes
+block hits to:
+
+- Protect a hero that just spawned.
+- Hold fire before a round starts.
+- Turn off friendly fire.
+
+<Samples>
+
+```ts
+import { onDamage } from 'modlock'
+
+// The entities your mod protects from every hit, such as heroes that just
+// spawned.
+const shielded = new Set<number>()
+
+onDamage((hit) => (shielded.has(hit.victim) ? { block: true } : undefined))
+```
+
+```luau
+-- The entities your mod protects from every hit, such as heroes that just
+-- spawned.
+local shielded: { [number]: boolean } = {}
+
+modlock.onDamage(function(hit)
+	if shielded[hit.victim] then
+		return { block = true }
+	end
+	return nil
+end)
+```
+
+```python
+# The entities your mod protects from every hit, such as heroes that just
+# spawned.
+shielded: set[int] = set()
+
+
+@modlock.on_damage
+def shield(hit: modlock.DamageEvent) -> modlock.DamageResult | None:
+    return modlock.DamageResult(block=True) if hit.victim in shielded else None
+```
+
+```go
+// The entities your mod protects from every hit, such as heroes that just
+// spawned.
+var shielded = map[uint32]bool{}
+
+func init() {
+	mod.OnDamage(func(hit *mod.DamageEvent) *mod.DamageResult {
+		if !shielded[hit.GetVictim()] {
+			return nil
+		}
+		block := true
+		return &mod.DamageResult{Block: &block}
+	})
+}
+```
+
+</Samples>
+
+## React to a kill
+
+`onKill` runs your handler after each hit that kills a hero or a unit, with the
+player on each side:
+
+<Samples>
+
+```ts
+import { log, onKill } from 'modlock'
+
+onKill(({ attackerPlayer, victimPlayer }) => {
+  if (attackerPlayer.slot >= 0 && victimPlayer.slot >= 0) {
+    log(`slot ${attackerPlayer.slot} defeated slot ${victimPlayer.slot}`)
+  }
+})
+```
+
+```luau
+modlock.onKill(function(kill)
+	if kill.attackerPlayer.slot >= 0 and kill.victimPlayer.slot >= 0 then
+		modlock.log(`slot {kill.attackerPlayer.slot} defeated slot {kill.victimPlayer.slot}`)
+	end
+end)
+```
+
+```python
+@modlock.on_kill
+def defeated(kill: modlock.KillEvent) -> None:
+    if kill.attacker_player.slot >= 0 and kill.victim_player.slot >= 0:
+        modlock.log(f"slot {kill.attacker_player.slot} defeated slot {kill.victim_player.slot}")
+```
+
+```go
+mod.OnKill(func(kill *mod.KillEvent) {
+	if kill.GetAttackerPlayer() >= 0 && kill.GetVictimPlayer() >= 0 {
+		mod.Log("slot", kill.GetAttackerPlayer(), "defeated slot", kill.GetVictimPlayer())
+	}
+})
+```
+
+</Samples>
+
+The sample logs only kills between two players' heroes, since a slot of -1
+means no player's hero is on that side. The kill comes from the same hit
+`onDamaged` reports, one that took all the health the victim had left. Python
+spells the fields in `snake_case`, and Go reads each player as a slot, such as
+`kill.GetVictimPlayer()`.
+
+| Field            | Holds                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------- |
+| `victim`         | The entity that died.                                                                             |
+| `victimPlayer`   | The player whose hero died, or slot -1 for a unit.                                                |
+| `attacker`       | The entity credited with the killing hit, or 0 for a hazard.                                      |
+| `attackerPlayer` | The player whose hero is the attacker, or slot -1. A hero that killed itself is its own attacker. |
+| `ability`        | The ability that dealt the killing hit, or 0.                                                     |
+
+To turn a kill into a score, use [Kill scoring](/mechanics/kill-scoring).
+
+## Melee, parries and heals
+
+`onMelee` reports each melee swing, with whether it was heavy and the entities
+it struck, and `onParry` reports each parry that catches one. `onHeal` reports
+health a hero or unit regains at once.
+[Events](/guides/events#heals-levels-and-melee) lists their fields and what a
+heal leaves out.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/aperturerobotics/cli"
 	modcli "github.com/paralin/modlock/cli"
+	"github.com/paralin/modlock/internal/selfupdate"
 	"github.com/pkg/errors"
 )
 
@@ -37,6 +38,28 @@ var settings = []setting{{
 		config.SkipUpdateCheck = !on
 		return err
 	},
+}, {
+	name:  "editor-offer",
+	usage: "on to offer the editor extension once, off to never ask",
+	get: func(config *modcli.Config) string {
+		return onOff(!config.GetEditorOffered())
+	},
+	set: func(config *modcli.Config, value string) error {
+		on, err := parseOnOff(value)
+		config.EditorOffered = !on
+		return err
+	},
+}, {
+	name:  "channel",
+	usage: "stable to update to releases, master to follow the master branch's newest build",
+	get: func(config *modcli.Config) string {
+		return string(updateChannel(config))
+	},
+	set: func(config *modcli.Config, value string) error {
+		channel, err := selfupdate.ParseChannel(value)
+		config.Channel = string(channel)
+		return err
+	},
 }}
 
 // configCommand lists and changes the command line's settings.
@@ -58,7 +81,7 @@ func configCommand(out *printer) *cli.Command {
 				width = max(width, len(entry.name))
 			}
 			for _, entry := range settings {
-				out.field(fmt.Sprintf("%-*s", width, entry.name), fmt.Sprintf("%-4s %s", entry.get(config), paint(out.color, dim, entry.usage)))
+				out.field(fmt.Sprintf("%-*s", width, entry.name), fmt.Sprintf("%-6s %s", entry.get(config), paint(out.color, dim, entry.usage)))
 			}
 			out.field(fmt.Sprintf("%-*s", width, "file"), path)
 			return nil

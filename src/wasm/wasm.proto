@@ -73,8 +73,9 @@ message Empty {}
 // and returns the language's empty value, so a mod can retry on a later
 // frame instead of stopping.
 service Host {
-  // ReadDefinitionField verifies a modifier definition's currently applied
-  // float value. Unsupported hosts return no value.
+  // ReadDefinitionField reads the applied value of a definition's float
+  // field, such as one the manifest's definitions changed. Unsupported hosts
+  // return no value.
   rpc ReadDefinitionField(DefinitionFieldOptions) returns (DefinitionFieldResponse);
 
   // Log writes one line to the server log under the mod's name.
@@ -452,6 +453,12 @@ service Host {
   // MODIFIER_STATE_PARRY_ACTIVE.
   rpc ModifierState(modlock.wasm.abilities.ModifierStateRequest) returns (modlock.wasm.abilities.ActiveResponse);
 
+  // Modifiers lists every modifier an entity holds, such as the stun a
+  // hero's ultimate keeps on its target, with its name, class, caster,
+  // ability, age, time left and stacks. An entity that holds none answers an
+  // empty list.
+  rpc Modifiers(modlock.wasm.entities.EntityRequest) returns (modlock.wasm.abilities.ModifiersResponse);
+
   // HoldModifierState holds a modifier state, such as
   // MODIFIER_STATE_FRIENDLY_FIRE_ENABLED, on an entity while the mod runs, or
   // releases the hold. The hold ends with the entity.
@@ -737,6 +744,18 @@ service Host {
   // as rocket_launcher_rocket_projectile, in Launch and Impact events. A new
   // call replaces the list; an empty list stops watching.
   rpc WatchProjectiles(modlock.wasm.combat.ProjectileOptions) returns (Empty);
+
+  // HoldEntityModifier keeps a modifier, named as GiveModifier names it, on a
+  // live entity with no expiry, giving it back whenever the game removes it
+  // while the entity lives. The hold ends with the entity or when active is
+  // false.
+  rpc HoldEntityModifier(modlock.wasm.abilities.HoldEntityModifierRequest) returns (Empty);
+
+  // GiveEntityModifier gives a live entity, such as Npc.entity or Pawn.entity,
+  // a modifier for seconds. An ability's modifier, named
+  // "<ability>/<modifier>", resolves its parent ability subclass even when the
+  // entity owns no abilities.
+  rpc GiveEntityModifier(modlock.wasm.abilities.GiveEntityModifierRequest) returns (Empty);
 }
 
 // Mod is the mod the game delivers events to, one at a time on the server's
@@ -775,6 +794,34 @@ service Mod {
   // Damaged reports one hit the game applied, while the mod asked for
   // damage reports. Hits arrive before the next frame.
   rpc Damaged(modlock.wasm.combat.DamagedEvent) returns (Empty);
+
+  // Killed reports one hero or unit a hit killed, while the mod asked for
+  // kills, after the hit's Damaged event and before the next frame.
+  rpc Killed(modlock.wasm.combat.KillEvent) returns (Empty);
+
+  // AbilityCast reports one ability the game executed, while the mod asked
+  // for casts, before the next frame.
+  rpc AbilityCast(modlock.wasm.abilities.AbilityCastEvent) returns (Empty);
+
+  // ModifierFired reports one modifier event the mod watches, before the
+  // next frame.
+  rpc ModifierFired(modlock.wasm.combat.ModifierFiredEvent) returns (Empty);
+
+  // Healed reports one heal, while the mod asked for heals, before the next
+  // frame.
+  rpc Healed(modlock.wasm.combat.HealEvent) returns (Empty);
+
+  // LevelChanged reports one hero reaching a new level, while the mod asked
+  // for levels, before the next frame.
+  rpc LevelChanged(modlock.wasm.combat.LevelEvent) returns (Empty);
+
+  // Melee reports one melee swing, while the mod asked for melees, before the
+  // next frame.
+  rpc Melee(modlock.wasm.combat.MeleeEvent) returns (Empty);
+
+  // Parried reports one parry that caught a swing, while the mod asked for
+  // parries, before the next frame.
+  rpc Parried(modlock.wasm.combat.ParryEvent) returns (Empty);
 
   // Input reports one player's presses of watched buttons, before the next
   // frame. A block in place still withholds them from the hero.
@@ -854,6 +901,32 @@ message StartResult {
   // Joins asks for a PlayerJoined event as each player the mod serves joins,
   // and a PlayerLeft event as each leaves.
   bool joins = 5;
+
+  // Casts asks for an AbilityCast event after each ability the game
+  // executes.
+  bool casts = 6;
+
+  // ModifierEvents asks for a ModifierFired event for each of the game's
+  // modifier events with these EModifierEvent names, such as
+  // MODIFIER_EVENT_ABILITY_CAST_STARTED or, without the prefix,
+  // ABILITY_CAST_STARTED. A name the running game lacks is logged and never
+  // fires.
+  repeated string modifier_events = 7;
+
+  // Kills asks for a Killed event after each hit that kills a hero or unit.
+  bool kills = 8;
+
+  // Heals asks for a Healed event after each heal.
+  bool heals = 9;
+
+  // Levels asks for a LevelChanged event as each hero reaches a new level.
+  bool levels = 10;
+
+  // Melees asks for a Melee event after each melee swing.
+  bool melees = 11;
+
+  // Parries asks for a Parried event after each parry that catches a swing.
+  bool parries = 12;
 }
 
 // FrameEvent identifies one server frame.

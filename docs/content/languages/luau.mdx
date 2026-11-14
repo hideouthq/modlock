@@ -1,0 +1,56 @@
+---
+title: Luau
+description: 'Luau mods: strict types, modules, typed entities and the console.'
+---
+
+A [Luau](https://luau.org) mod requires `@modlock` and registers its handlers
+in `main.luau`:
+
+```luau
+local modlock = require("@modlock")
+
+modlock.command("hello", function(player)
+	player:chat("Hello from Luau!")
+end)
+```
+
+The library's types check in strict mode, and an editor with the Luau
+language server finds the library and completes its calls. A module requires another by its relative path, such as
+`require("./round")`, as the [`bounty`](https://github.com/paralin/modlock/tree/master/examples/bounty) example does.
+
+The library has the TypeScript library's calls under the same names, which you
+call as methods, such as `player:chat(text)`. Because a Luau number cannot hold
+every 64-bit integer, a 64-bit id such as a Steam ID is a decimal string. A
+`Player` stays one object while the same person holds its slot. So `==` tells
+whether two values are the same player, and a `Player` works as a table key.
+Someone new in the slot gets a new object, so they never inherit the entries of
+the player who left. Build interfaces with `@modlock/ui`, `@modlock/hud` and
+`@modlock/theme`. Choose Luau with the switch in the sidebar, and the
+[guides](/guides/events) show every call in it.
+
+## Typed entities
+
+`@modlock/entities` reads and writes entity fields and creates entities. Give
+each entity a type, so the analyzer checks the fields and inputs you use:
+
+```luau
+local entities = require("@modlock/entities")
+
+local hero: entities.CCitadelPlayerPawn = entities.new("CCitadelPlayerPawn", pawn.entity)
+hero.m_iHealth = (hero.m_iHealth or 0) + 50
+
+local keys: entities.CNPC_TrooperBossKeys = { LaneNum = 2 }
+local boss: entities.CNPC_TrooperBoss? = entities.create("npc_trooper_boss", { position = position, keys = keys })
+```
+
+## The console
+
+With `@modlock/console` you set console variables with `setBoolean`,
+`setNumber` and `setString`, and run console commands with `run`:
+
+```luau
+local console = require("@modlock/console")
+
+console.setBoolean("citadel_allow_purchasing_anywhere", true)
+console.run("changelevel", "street_test")
+```

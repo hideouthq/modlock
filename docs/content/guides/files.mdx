@@ -1,0 +1,140 @@
+---
+title: Files
+description: Keep text files on the host, with defaults shipped in the mod.
+---
+
+Your mod reads and writes text files on the host, such as its configuration or the
+areas a player drew in the game. Put each file's default in your project's
+`data/` directory. `modlock build` copies that directory into the build, and
+`modlock publish` uploads it with the rest of the build.
+
+<Samples>
+
+```ts
+import { command, readFile, writeFile } from 'modlock'
+
+// The default message of the day is data/motd.txt. To show a different one,
+// a host puts its own motd.txt in the mod's files directory.
+let motd = readFile('motd.txt') ?? 'Welcome.'
+
+command('motd', (player, args) => {
+  if (args === '') {
+    player.chat(motd)
+    return
+  }
+  motd = args
+  if (!writeFile('motd.txt', motd)) {
+    player.chat('The message was not saved.')
+  }
+})
+```
+
+```luau
+-- The default message of the day is data/motd.txt. To show a different one,
+-- a host puts its own motd.txt in the mod's files directory.
+local motd = modlock.readFile("motd.txt") or "Welcome."
+
+modlock.command("motd", function(player, args)
+	if args == "" then
+		player:chat(motd)
+		return
+	end
+	motd = args
+	if not modlock.writeFile("motd.txt", motd) then
+		player:chat("The message was not saved.")
+	end
+end)
+```
+
+```python
+# The default message of the day is data/motd.txt. To show a different one,
+# a host puts its own motd.txt in the mod's files directory.
+motd = modlock.read_file("motd.txt") or "Welcome."
+
+
+@modlock.command("motd")
+def show(player: modlock.Player, args: str) -> None:
+    global motd
+    if not args:
+        player.chat(motd)
+        return
+    motd = args
+    if not modlock.write_file("motd.txt", motd):
+        player.chat("The message was not saved.")
+```
+
+```go
+// The default message of the day is data/motd.txt. To show a different one,
+// a host puts its own motd.txt in the mod's files directory.
+var motd = "Welcome."
+
+func init() {
+	mod.OnStart(func([]string) {
+		if text, err := mod.ReadFile("motd.txt"); err == nil && text != nil {
+			motd = *text
+		}
+	})
+
+	mod.Command("motd", func(p mod.Player, args string) {
+		if args == "" {
+			_ = p.Chat(motd)
+			return
+		}
+		motd = args
+		if err := mod.WriteFile("motd.txt", motd); err != nil {
+			_ = p.Chat("The message was not saved.")
+		}
+	})
+}
+```
+
+</Samples>
+
+| Call                    | Effect                                                                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `readFile(name)`        | Returns the file's text. The host looks for its own copy first, then for the one in the build's `data/`, and returns `undefined` when it finds neither. |
+| `writeFile(name, text)` | Writes the whole file to the host's copy, or nothing if the write fails partway. Returns `false` when the host refuses the write.                       |
+
+A file name is a relative path such as `maps/dl_midtown.json`, with `/`
+between its segments. The host refuses a name with an empty, `.` or `..`
+segment, and a name with a control character. It also refuses `\` and `:`,
+because Windows reads them as separators.
+
+The host keeps the files your mod writes in a directory named after the mod's
+slug. They stay there when the server restarts or you publish an update.
+`modlock dev` and `modlock play` keep that directory under Modlock's
+configuration directory:
+
+| System  | Directory                                             |
+| ------- | ----------------------------------------------------- |
+| Linux   | `~/.config/modlock/files/<slug>/`                     |
+| macOS   | `~/Library/Application Support/modlock/files/<slug>/` |
+| Windows | `%AppData%\modlock\files\<slug>\`                     |
+
+To replace a file your mod ships, a server operator puts a file of the same name
+in that directory.
+
+The files your mod writes can take up to 4 MiB together, and the host refuses a
+write that would pass that. Each host keeps its own files, so your mod should
+treat a missing file as a reason to use its default rather than as an error.
+
+## Structured files
+
+The host hands your mod each file's contents as a string and never parses
+them, so you choose the format and bundle a parser for it. This TypeScript mod
+keeps its areas in YAML and imports the `yaml` package to read them:
+
+```ts
+import { parse, stringify } from 'yaml'
+import { command, readFile, writeFile } from 'modlock'
+
+const areas = parse(readFile('areas.yaml') ?? 'spawn: []')
+
+command('savearea', (player) => {
+  const pawn = player.pawn()
+  if (!pawn) return
+  areas.spawn.push(pawn.position)
+  if (!writeFile('areas.yaml', stringify(areas)))
+    player.chat('The area was not saved.')
+})
+```

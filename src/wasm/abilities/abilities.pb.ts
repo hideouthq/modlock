@@ -362,6 +362,18 @@ export interface AbilityOptions {
    * are not removed; set them with charges.
    */
   maxCharges?: number
+  /**
+   * Cooldown makes every cooldown the ability starts from now on last this
+   * many seconds, in place of the game's own length. An ability that holds
+   * charges waits this long between casts. 0 leaves the ability always
+   * ready, and a negative value returns it to the game's own. The game asks
+   * for the length as it starts each cooldown and applies the hero's cooldown
+   * reduction to it, so it holds for every later cast and the hero's screen
+   * shows it; a cooldown already running keeps its end, which cooldown_end
+   * moves. It holds for this ability of this hero until the mod stops, so
+   * set it again after a hero change or a replaced ability.
+   */
+  cooldown?: number
 }
 
 export const AbilityOptions: MessageType<AbilityOptions> =
@@ -375,6 +387,7 @@ export const AbilityOptions: MessageType<AbilityOptions> =
       [5, 'cooldown_end', 2, 4],
       [6, 'recharge_end', 2, 4],
       [7, 'max_charges', 5, 4],
+      [8, 'cooldown', 2, 4],
     ],
     {
       decode: (
@@ -406,6 +419,9 @@ export const AbilityOptions: MessageType<AbilityOptions> =
               break
             case 7:
               m.maxCharges = r.int32()
+              break
+            case 8:
+              m.cooldown = r.float()
               break
             default:
               r.skip(t)
@@ -441,6 +457,10 @@ export const AbilityOptions: MessageType<AbilityOptions> =
         {
           const v = m.maxCharges
           if (v != null) w.uint32(56).int32(v)
+        }
+        {
+          const v = m.cooldown
+          if (v != null) w.uint32(69).float(v)
         }
       },
     },
@@ -970,6 +990,200 @@ export const ActiveResponse: MessageType<ActiveResponse> =
   )
 
 /**
+ * ModifiersResponse lists the modifiers an entity holds, in the game's order.
+ *
+ * @generated from message modlock.wasm.abilities.ModifiersResponse
+ */
+export interface ModifiersResponse {
+  modifiers?: Modifier[]
+}
+
+export const ModifiersResponse: MessageType<ModifiersResponse> =
+  /* @__PURE__ */ createMessageType<ModifiersResponse>(
+    'modlock.wasm.abilities.ModifiersResponse',
+    () => [[1, 'modifiers', 11, 1, Modifier.codec]],
+    {
+      decode: (
+        r: BinaryReader,
+        end: number,
+        m: ModifiersResponse,
+      ): ModifiersResponse => {
+        while (r.pos < end) {
+          const t = r.tag()
+          if ((t & 7) === 4) return m
+          switch (t >>> 3) {
+            case 1:
+              ;(m.modifiers ??= []).push(Modifier.decode(r, r.delimited(), {}))
+              break
+            default:
+              r.skip(t)
+          }
+        }
+        return m
+      },
+      encode: (m: ModifiersResponse, w: Writer): void => {
+        {
+          const a = m.modifiers
+          if (a != null) for (const e of a) Modifier.writeField(w, 1, e)
+        }
+      },
+    },
+  )
+
+/**
+ * Modifier is one modifier an entity holds, as the game keeps it.
+ *
+ * @generated from message modlock.wasm.abilities.Modifier
+ */
+export interface Modifier {
+  /**
+   * Name is the modifier's name, such as modifier_citadel_knockdown, as
+   * GiveModifier and ReadModifierField name it. It is empty when the game
+   * keeps no readable name.
+   */
+  name?: string
+  /**
+   * ClassName is the modifier's server class, such as
+   * CCitadel_Modifier_Knockdown, which ReadModifierField takes. Several
+   * names can share a class.
+   */
+  className?: string
+  /**
+   * Caster is the handle of the entity that applied it, such as the hero
+   * whose ability did, or 0 when none did.
+   */
+  caster?: number
+  /**
+   * Ability is the handle of the ability that applied it, or 0 when none did.
+   */
+  ability?: number
+  /**
+   * Age is how many seconds ago the game created it.
+   */
+  age?: number
+  /**
+   * Remaining is how many seconds it has left since it was last applied. It
+   * is absent for a modifier that lasts until something removes it.
+   */
+  remaining?: number
+  /**
+   * Stacks and MaxStacks count its stacks, for a modifier that stacks.
+   */
+  stacks?: number
+  maxStacks?: number
+  /**
+   * Team is the team number it belongs to.
+   */
+  team?: number
+  /**
+   * Disabled is true while the game keeps it without its effects.
+   */
+  disabled?: boolean
+}
+
+export const Modifier: MessageType<Modifier> =
+  /* @__PURE__ */ createMessageType<Modifier>(
+    'modlock.wasm.abilities.Modifier',
+    () => [
+      [1, 'name', 9],
+      [2, 'class_name', 9],
+      [3, 'caster', 13],
+      [4, 'ability', 13],
+      [5, 'age', 2],
+      [6, 'remaining', 2, 4],
+      [7, 'stacks', 5],
+      [8, 'max_stacks', 5],
+      [9, 'team', 13],
+      [10, 'disabled', 8],
+    ],
+    {
+      decode: (r: BinaryReader, end: number, m: Modifier): Modifier => {
+        while (r.pos < end) {
+          const t = r.tag()
+          if ((t & 7) === 4) return m
+          switch (t >>> 3) {
+            case 1:
+              m.name = r.string()
+              break
+            case 2:
+              m.className = r.string()
+              break
+            case 3:
+              m.caster = r.uint32()
+              break
+            case 4:
+              m.ability = r.uint32()
+              break
+            case 5:
+              m.age = r.float()
+              break
+            case 6:
+              m.remaining = r.float()
+              break
+            case 7:
+              m.stacks = r.int32()
+              break
+            case 8:
+              m.maxStacks = r.int32()
+              break
+            case 9:
+              m.team = r.uint32()
+              break
+            case 10:
+              m.disabled = r.bool()
+              break
+            default:
+              r.skip(t)
+          }
+        }
+        return m
+      },
+      encode: (m: Modifier, w: Writer): void => {
+        {
+          const v = m.name
+          if (v) w.uint32(10).string(v)
+        }
+        {
+          const v = m.className
+          if (v) w.uint32(18).string(v)
+        }
+        {
+          const v = m.caster
+          if (v) w.uint32(24).uint32(v)
+        }
+        {
+          const v = m.ability
+          if (v) w.uint32(32).uint32(v)
+        }
+        {
+          const v = m.age
+          if (v != null && v !== 0) w.uint32(45).float(v)
+        }
+        {
+          const v = m.remaining
+          if (v != null) w.uint32(53).float(v)
+        }
+        {
+          const v = m.stacks
+          if (v) w.uint32(56).int32(v)
+        }
+        {
+          const v = m.maxStacks
+          if (v) w.uint32(64).int32(v)
+        }
+        {
+          const v = m.team
+          if (v) w.uint32(72).uint32(v)
+        }
+        {
+          const v = m.disabled
+          if (v) w.uint32(80).bool(v)
+        }
+      },
+    },
+  )
+
+/**
  * HoldModifierStateRequest holds one modifier state on an entity, or
  * releases it.
  *
@@ -1252,6 +1466,258 @@ export const BuildItem: MessageType<BuildItem> =
         {
           const v = m.annotation
           if (v) w.uint32(18).string(v)
+        }
+      },
+    },
+  )
+
+/**
+ * HoldEntityModifierRequest holds or releases a modifier on an entity.
+ *
+ * @generated from message modlock.wasm.abilities.HoldEntityModifierRequest
+ */
+export interface HoldEntityModifierRequest {
+  /**
+   * Entity is the entity handle, such as Npc.entity or Pawn.entity.
+   */
+  entity?: number
+  /**
+   * Modifier names the modifier as GiveModifierRequest.modifier does, such
+   * as upgrade_colossus/modifier_colossus_active.
+   */
+  modifier?: string
+  /**
+   * Active holds the modifier when true or omitted; false releases the hold.
+   */
+  active?: boolean
+}
+
+export const HoldEntityModifierRequest: MessageType<HoldEntityModifierRequest> =
+  /* @__PURE__ */ createMessageType<HoldEntityModifierRequest>(
+    'modlock.wasm.abilities.HoldEntityModifierRequest',
+    () => [
+      [1, 'entity', 13],
+      [2, 'modifier', 9],
+      [3, 'active', 8, 4],
+    ],
+    {
+      decode: (
+        r: BinaryReader,
+        end: number,
+        m: HoldEntityModifierRequest,
+      ): HoldEntityModifierRequest => {
+        while (r.pos < end) {
+          const t = r.tag()
+          if ((t & 7) === 4) return m
+          switch (t >>> 3) {
+            case 1:
+              m.entity = r.uint32()
+              break
+            case 2:
+              m.modifier = r.string()
+              break
+            case 3:
+              m.active = r.bool()
+              break
+            default:
+              r.skip(t)
+          }
+        }
+        return m
+      },
+      encode: (m: HoldEntityModifierRequest, w: Writer): void => {
+        {
+          const v = m.entity
+          if (v) w.uint32(8).uint32(v)
+        }
+        {
+          const v = m.modifier
+          if (v) w.uint32(18).string(v)
+        }
+        {
+          const v = m.active
+          if (v != null) w.uint32(24).bool(v)
+        }
+      },
+    },
+  )
+
+/**
+ * GiveEntityModifierRequest gives a live entity a modifier.
+ *
+ * @generated from message modlock.wasm.abilities.GiveEntityModifierRequest
+ */
+export interface GiveEntityModifierRequest {
+  /**
+   * Entity is the entity handle, such as Npc.entity or Pawn.entity.
+   */
+  entity?: number
+  /**
+   * Modifier names an ability's modifier as "<ability>/<modifier>", or a
+   * standalone modifier by its name, such as modifier_citadel_idol_glow.
+   */
+  modifier?: string
+  /**
+   * Seconds is how long the modifier lasts.
+   */
+  seconds?: number
+}
+
+export const GiveEntityModifierRequest: MessageType<GiveEntityModifierRequest> =
+  /* @__PURE__ */ createMessageType<GiveEntityModifierRequest>(
+    'modlock.wasm.abilities.GiveEntityModifierRequest',
+    () => [
+      [1, 'entity', 13],
+      [2, 'modifier', 9],
+      [3, 'seconds', 2],
+    ],
+    {
+      decode: (
+        r: BinaryReader,
+        end: number,
+        m: GiveEntityModifierRequest,
+      ): GiveEntityModifierRequest => {
+        while (r.pos < end) {
+          const t = r.tag()
+          if ((t & 7) === 4) return m
+          switch (t >>> 3) {
+            case 1:
+              m.entity = r.uint32()
+              break
+            case 2:
+              m.modifier = r.string()
+              break
+            case 3:
+              m.seconds = r.float()
+              break
+            default:
+              r.skip(t)
+          }
+        }
+        return m
+      },
+      encode: (m: GiveEntityModifierRequest, w: Writer): void => {
+        {
+          const v = m.entity
+          if (v) w.uint32(8).uint32(v)
+        }
+        {
+          const v = m.modifier
+          if (v) w.uint32(18).string(v)
+        }
+        {
+          const v = m.seconds
+          if (v != null && v !== 0) w.uint32(29).float(v)
+        }
+      },
+    },
+  )
+
+/**
+ * AbilityCastEvent reports one ability the game executed: the moment the
+ * cast takes effect, after any cast time, for a hero's abilities and the
+ * items a player activates.
+ *
+ * @generated from message modlock.wasm.abilities.AbilityCastEvent
+ */
+export interface AbilityCastEvent {
+  /**
+   * Caster is the entity that cast it, a hero for a player's cast.
+   */
+  caster?: number
+  /**
+   * Player is the slot of the player whose hero cast it, or -1.
+   */
+  player?: number
+  /**
+   * Ability is the ability's entity handle, as Ability.entity reports it.
+   */
+  ability?: number
+  /**
+   * Name is the ability's name, such as citadel_ability_hornet_snipe, when
+   * a player's hero cast it.
+   */
+  name?: string
+  /**
+   * Slot is the ability's place on the hero, as Ability.slot reports it, or
+   * -1 when the caster is not a player's hero.
+   */
+  slot?: number
+  /**
+   * Target is the entity the cast was aimed at, or zero without one.
+   */
+  target?: number
+}
+
+export const AbilityCastEvent: MessageType<AbilityCastEvent> =
+  /* @__PURE__ */ createMessageType<AbilityCastEvent>(
+    'modlock.wasm.abilities.AbilityCastEvent',
+    () => [
+      [1, 'caster', 13],
+      [2, 'player', 5],
+      [3, 'ability', 13],
+      [4, 'name', 9],
+      [5, 'slot', 5],
+      [6, 'target', 13],
+    ],
+    {
+      decode: (
+        r: BinaryReader,
+        end: number,
+        m: AbilityCastEvent,
+      ): AbilityCastEvent => {
+        while (r.pos < end) {
+          const t = r.tag()
+          if ((t & 7) === 4) return m
+          switch (t >>> 3) {
+            case 1:
+              m.caster = r.uint32()
+              break
+            case 2:
+              m.player = r.int32()
+              break
+            case 3:
+              m.ability = r.uint32()
+              break
+            case 4:
+              m.name = r.string()
+              break
+            case 5:
+              m.slot = r.int32()
+              break
+            case 6:
+              m.target = r.uint32()
+              break
+            default:
+              r.skip(t)
+          }
+        }
+        return m
+      },
+      encode: (m: AbilityCastEvent, w: Writer): void => {
+        {
+          const v = m.caster
+          if (v) w.uint32(8).uint32(v)
+        }
+        {
+          const v = m.player
+          if (v) w.uint32(16).int32(v)
+        }
+        {
+          const v = m.ability
+          if (v) w.uint32(24).uint32(v)
+        }
+        {
+          const v = m.name
+          if (v) w.uint32(34).string(v)
+        }
+        {
+          const v = m.slot
+          if (v) w.uint32(40).int32(v)
+        }
+        {
+          const v = m.target
+          if (v) w.uint32(48).uint32(v)
         }
       },
     },

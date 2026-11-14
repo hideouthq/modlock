@@ -1,0 +1,84 @@
+---
+title: Camera
+description: Pull back, aim and shake the camera, and play curves on it.
+---
+
+`playCamera` moves a player's camera along a curve for each camera param, all
+on one timeline. The host sends each curve to the game as the game's own lerps,
+and the game plays them smoothly with no timers in your mod. Camera
+curves exist only in TypeScript, so this page's samples are TypeScript only. The
+calls they build on, `moveCamera` and `clearCamera`, are in every language.
+
+```ts
+// Pull back while the view widens, ease back in after two seconds.
+playCamera(player, {
+  relative: true,
+  tracks: {
+    distance: curve.chain(
+      curve.line(0, 300, 0.4, curve.ease.out),
+      curve.hold(300, 2),
+      curve.line(300, 0, 0.6, curve.ease.inOut),
+    ),
+    fieldOfView: curve.keyframes([
+      { at: 0, value: 0 },
+      { at: 0.4, value: 15, ease: curve.ease.out },
+      { at: 3, value: 0, ease: curve.ease.sine },
+    ]),
+  },
+})
+
+// Circle a point of interest until the round starts.
+const tour = playCamera(player, {
+  loop: true,
+  tracks: { target: curve.orbit({ center: spot, radius: 400, duration: 12 }) },
+})
+after(30, () => tour?.cancel())
+```
+
+## Options
+
+| Option            | Does                                                                                                                                                                                   |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tracks`          | A curve for each param: `distance`, `fieldOfView`, `target`, `verticalOffset`, `horizontalOffset`.                                                                                     |
+| `relative`        | Adds each curve to the param's usual value, so end each curve at zero.                                                                                                                 |
+| `loop`            | Plays the curves again until `cancel()`.                                                                                                                                               |
+| `rate`            | How many lerps a second the host sends for a sampled span. 30 by default.                                                                                                              |
+| context, priority | A move takes a context of its own unless you pass one. When moves in two contexts overlap, the one with the higher `priority` plays, and the camera returns to the other when it ends. |
+
+`playCamera` returns a move with `duration` and `cancel()`, or nothing when the
+player has no hero. Each param snaps back to its usual value when its curve
+ends, so end a curve at rest.
+
+## Curves
+
+The `curve` namespace builds curves. A curve is a list of spans, and every
+builder returns a curve, so you can pass one builder's result to another:
+
+| Call                                                                 | Curve                                                                                                 |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `curve.line(from, to, seconds, ease?)`, `curve.hold(value, seconds)` | A move from one value to another, or a value held.                                                    |
+| `curve.keyframes(keys, { smooth? })`                                 | Through `{ at, value, ease? }` keys, straight or on a spline.                                         |
+| `curve.through(points, { speed, ease?, smooth? })`                   | Through points at a speed, each move as long as its distance.                                         |
+| `curve.orbit({ center, radius, duration, turns?, start?, rise? })`   | Around a point, for the `target` param; a spiral when rising.                                         |
+| `curve.wave({ amplitude, frequency, duration, decay? })`             | Swings either side of zero, shrinking with `decay`.                                                   |
+| `curve.chain(...)`, `repeat(c, n)`, `reverse(c)`, `pingPong(c)`      | Curves one after another, repeated, backward, there and back.                                         |
+| `curve.durationOf(c)`, `curve.valueAt(c, seconds)`                   | How long a curve plays, and its value at a time.                                                      |
+| `cameraPulse`                                                        | Moves a param out, holds it and brings it back, as an ability pulls the camera back while it charges. |
+| `cameraShake`                                                        | Shakes one param.                                                                                     |
+
+| Ease                                                                    | Plays as                                                                                                                                                               |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `linear`, `ease.bias(b)`, `ease.gain(g)` (Valve's, linear at 0.5)       | One lerp the game draws itself.                                                                                                                                        |
+| `in`, `out`, `inOut`, `sine`, `back`, `elastic`, `bounce`, `shaped(fn)` | The host samples the ease into `rate` lerps a second. The client plays at most one queued lerp a frame, so on a slower client the span plays slower than its duration. |
+
+`curve.shaped(fn)` makes any function from 0 to 1 an ease.
+
+## The view follows the aim
+
+The view always looks along the player's own aim, which keeps
+`Pawn.cameraPosition` and `cameraAngles` accurate for finding what the player
+aims at. The game's camera operations (`CCitadelUserMsg_CameraController`) move
+only the five params above. Frame a higher
+view by raising `verticalOffset` and pulling `distance` back, and shift it with
+`horizontalOffset`; the player tilts it with the mouse. Turning the view itself
+means setting the player's view angles, which takes over their look.

@@ -5,8 +5,10 @@ on top of upstream Modlock. Bebop Wars is a consumer, not a dependency of this
 fork. Mode rules, currencies, UI adapters and research commands belong in the
 mode project.
 
-This branch includes upstream through `d54df29` and retains the two original
-Bebop commits, `b725809` and `5e63fed`. The `29ae444-bebop.2` release tag remains
+This branch includes upstream through `69d241c`. Upstream's `e9f1c39` now
+changes modifier definitions (`FILE_MODIFIERS`), so the fork's own modifier
+writer from `b725809` is gone; that commit's definition readback, scripted
+press bypass and `cancelPress` remain, as does `5e63fed`. The `29ae444-bebop.2` release tag remains
 unchanged. A branch update is not an update to an installed runtime: build the
 CLI, generated libraries, renderer and Windows host from the same revision
 before adopting it.
@@ -29,10 +31,10 @@ remaining checks.
 
 | Extension | Owner | Contract |
 | --- | --- | --- |
-| Modifier float definitions and readback | Native definition layer | Direct schema-checked float fields on modifier definitions; no pointer traversal or copies |
+| Definition readback | Native definition layer | `readDefinitionField` reads the first float of a definition field, found by the same file, entry and path rules the manifest's `definitions` write through |
 | Scripted press bypass and cancellation | Native input layer | A queued press bypasses blocking for one input; cancellation removes undelivered queued buttons |
 | Packaged image dimensions | Panorama content compiler | Stylesheet image tables use dimensions from packaged VTEX headers |
-| Numeric native tier bonuses | Native definition layer | Replace values of existing ability-upgrade rows; preserve native costs and row identity |
+| Numeric native tier bonuses | Native definition layer | Replace values of existing ability-upgrade rows; preserve native costs and row identity. `Definition.upgrades` and `upgrade_order` are fields 100 and 101, clear of upstream's numbers |
 | Layout unload callbacks | Panorama renderer and layout library | `Modlock.onUnload(handler)` runs once before a layout or its ancestor is removed or replaced; use it to cancel work |
 | Native panel changes | Panorama renderer and layout library | `Modlock.native` is the one way a layout changes the game's own panels; every change is released when the layout unloads, and a released visibility goes back to the game's own CSS |
 | Session commands | Relay and renderer | The relay stream carries `connect` to a loopback port and `disconnect`, which the renderer runs as console commands |
@@ -191,7 +193,7 @@ not necessarily the final ability statistic. The writer leaves native tier
 costs unchanged; the tested Hook uses 1/2/5.
 
 An entry containing `upgrades` accepts only `FILE_ABILITIES` and cannot also
-contain `properties`, `fields` or `copy_fields`. Each requested tier must be
+contain `properties`, `fields`, `copy_fields` or `text_fields`. Each requested tier must be
 unique, exist in the native ability and contain existing named properties with
 finite values. The writer changes both normal and Street Brawl numeric caches;
 it does not add rows, change strings, or grant points.
@@ -223,7 +225,7 @@ change. Keep generated protocol outputs together with their source definitions.
 Do not hand-edit generated bindings or copy mode-specific balance into runtime
 code.
 
-Run the native tier, modifier and input tests, the Panorama compiler tests, and
+Run the native tier, definition and input tests, the Panorama compiler tests, and
 matching CLI/host builds after relevant changes. Repeat live tests after a game
 update: fixture tests verify validation and restoration, while a live client
 establishes that the current engine still uses the expected values.

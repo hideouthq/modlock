@@ -1,0 +1,74 @@
+---
+title: Your first mod
+description: Make a project, run it in the game and change it while it runs.
+---
+
+This page will take you from the `modlock` command to your own mod running in
+the game, and then you'll change the mod while you play it.
+
+## Make a project
+
+Run each line in a terminal:
+
+```sh
+modlock new
+cd my-mod
+modlock dev
+```
+
+`modlock new` asks for your mod's name and language, then writes the project
+into a directory named after the mod, so "Zombie Tag" becomes `zombie-tag`.
+
+## Project files
+
+A project is a directory with the manifest, an entry file and the files your
+editor needs for the mod's language:
+
+| Language   | Files                                                    | Notes                                                   |
+| ---------- | -------------------------------------------------------- | ------------------------------------------------------- |
+| TypeScript | `mod.json`, `main.ts`, `tsconfig.json`, `node_modules/`  | `node_modules/modlock` contains the library's types.    |
+| JavaScript | `mod.json`, `main.js`, `tsconfig.json`, `node_modules/`  | Your editor checks types from JSDoc comments.           |
+| Luau       | `mod.json`, `main.luau`, `.luaurc`, `.modlock/`          | `.modlock/` contains the library's types.               |
+| Python     | `mod.json`, `main.py`, `pyrightconfig.json`, `.modlock/` | `.modlock/` contains the library's types.               |
+| Go         | `mod.json`, `main.go`, `go.mod`, `go.sum`                | `modlock new` needs [Go](https://go.dev/dl/) installed. |
+
+Every project also gets a `.gitignore` and a `.vscode/extensions.json`, which
+lists the editor extensions suggested for its language.
+
+`mod.json` is the [manifest](/reference/manifest), which has the mod's slug,
+name and version. The entry file, such as `main.ts`, contains your mod's code, and
+`modlock new` fills it with what most game modes start from. It turns off lane
+troopers and jungle creeps and lets any number of players pick the same hero. It
+[seats](/guides/toolkit#seat-the-players) each player who joins on a team with a
+hero and brings a fallen hero back after 3 seconds. It also welcomes each player
+and answers `/hello` in chat. Delete the parts your mode does not want.
+
+## Run it
+
+The last line you ran, `modlock dev`, built your mod, started a local server
+with it and launched Deadlock through Steam to join that server. The terminal
+shows your mod's log while it runs.
+
+Type `/hello` in the game's chat. Then change the reply in the entry file and
+save it. `modlock dev` rebuilds the mod each time you save and reloads it
+in the running server, so typing `/hello` again shows your new reply. When a
+build fails, `modlock dev` prints its errors and the server keeps running the
+last build that worked.
+
+On a computer without Deadlock, such as a Mac, `modlock dev` runs your mod in
+the [sandbox](/guides/testing#in-the-sandbox) instead, and you type `/hello` in
+the terminal.
+
+## If something goes wrong
+
+| You see                                                  | Do this                                                                                                             |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `modlock` is not recognized                              | See [Install](/start/install).                                                                                      |
+| `Import "modlock" could not be resolved` in a Python mod | Open the mod's own folder in the editor. Pyright reads `pyrightconfig.json` only from the folder the editor opened. |
+| `modlock new` stops before writing a Go project          | Install [Go](https://go.dev/dl/), then run it again.                                                                |
+
+## Next
+
+The [tutorial](/start/tutorial) grows the project into a small game mode, a few
+lines at a time. To play it with friends, see
+[Playing together](/reference/play-together).

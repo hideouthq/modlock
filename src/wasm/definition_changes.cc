@@ -4,19 +4,24 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <map>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
+#include "gameinterop/utl_vector.h"
 #include "modlock/gameinterop/ability_definitions.h"
 #include "modlock/gameinterop/bot_difficulty_definitions.h"
 #include "modlock/gameinterop/entity_abi.h"
 #include "modlock/gameinterop/hero_definitions.h"
 #include "modlock/gameinterop/keyvalues.h"
 #include "wasm/ability_upgrades.h"
-#include "wasm/modifier_definition.h"
+#include "wasm/entity_rules.h"
+#include "wasm/text_values.h"
 
 namespace modlock::wasm {
 namespace {
@@ -100,163 +105,447 @@ void SetProperties(unsigned char* definition, void* schema, const char* module,
   }
 }
 
-// Place is where a field path leads in an entry's data: a field, or the float
-// value of one key in an enum-keyed map field.
-struct Place {
-  size_t offset;
-  size_t size;
-  std::optional<int32_t> key;
+// Key is the key a path step selects in a map or script value list: an enum
+// value, matched by its bytes at the key's storage size, or a symbol's text,
+// matched against the characters a node's key points to.
+struct Key {
+  std::array<unsigned char, sizeof(int64_t)> bytes{};
+  size_t size = 0;
+  std::optional<std::string> text;
+
+  // Matches reports whether the key stored at storage is this key.
+  bool Matches(const unsigned char* storage) const {
+    if (!text) {
+      return std::memcmp(storage, bytes.data(), size) == 0;
+    }
+    const char* chars = nullptr;
+    std::memcpy(&chars, storage, sizeof(chars));
+    return chars != nullptr && *text == chars;
+  }
 };
 
-// ResolvePath sums the offsets along a path of Class.field steps separated by
-// slashes, such as CitadelAbilityVData.m_projectileInfo/ProjectileInfo_t.m_flSpeed.
-// A last step may end in [Enum.Value], naming one value of a map field.
-std::expected<Place, std::string> ResolvePath(void* schema, const char* module,
-                                              std::string_view path) {
-  // Split off a map key.
-  std::optional<int32_t> key;
-  if (path.ends_with(']')) {
-    const auto open = path.rfind('[');
-    const auto inner = path.substr(open + 1, path.size() - open - 2);
-    const auto dot = inner.find('.');
-    if (open == std::string_view::npos || dot == std::string_view::npos) {
-      return std::unexpected("a map key is Enum.Value");
+// Layout is a schema type's storage size and alignment.
+struct Layout {
+  size_t size;
+  size_t alignment;
+};
+
+// IsSymbol reports whether a type is a pointer to characters, the key type of
+// a map keyed by name, such as m_mapWeaponInfos.
+bool IsSymbol(std::string_view type) {
+  return type == "CGlobalSymbol" || type == "CUtlSymbolLarge" || type == "CUtlString";
+}
+
+// LayoutOf returns the storage of a map's key or value type: a builtin
+// number, a symbol, an enum or a declared class.
+std::expected<Layout, std::string> LayoutOf(void* schema, const char* module,
+                                            std::string_view type) {
+  static constexpr std::array<std::pair<std::string_view, size_t>, 11> kBuiltins{{
+      {"bool", 1},
+      {"int8", 1},
+      {"uint8", 1},
+      {"int16", 2},
+      {"uint16", 2},
+      {"int32", 4},
+      {"uint32", 4},
+      {"float32", 4},
+      {"int64", 8},
+      {"uint64", 8},
+      {"float64", 8},
+  }};
+  for (const auto& [name, size] : kBuiltins) {
+    if (type == name) {
+      return Layout{size, size};
     }
-    const std::string type(inner.substr(0, dot));
-    const std::string value(inner.substr(dot + 1));
-    auto resolved = gameinterop::SchemaEnumValueOf(schema, module, type.c_str(), value.c_str());
-    if (!resolved) {
-      return std::unexpected(resolved.error());
-    }
-    key = static_cast<int32_t>(*resolved);
-    path = path.substr(0, open);
+  }
+  if (IsSymbol(type)) {
+    return Layout{sizeof(char*), alignof(char*)};
+  }
+  const std::string name(type);
+  if (auto size = gameinterop::SchemaEnumSizeOf(schema, module, name.c_str())) {
+    return Layout{*size, *size};
+  }
+  auto size = gameinterop::SchemaClassSizeOf(schema, module, name.c_str());
+  auto alignment = gameinterop::SchemaClassAlignmentOf(schema, module, name.c_str());
+  if (!size || !alignment) {
+    return std::unexpected("type " + name + " has no known layout");
+  }
+  return Layout{*size, *alignment};
+}
+
+// AlignUp rounds offset up to a power-of-two alignment.
+size_t AlignUp(size_t offset, size_t alignment) {
+  return (offset + alignment - 1) & ~(alignment - 1);
+}
+
+// KeyOf resolves the text between a step's brackets for a key of key_type: a
+// symbol's text, or an enum value named Value or key_type.Value.
+std::expected<Key, std::string> KeyOf(void* schema, const char* module, std::string_view key_type,
+                                      std::string_view text) {
+  // A symbol key is its text.
+  if (IsSymbol(key_type)) {
+    return Key{.size = sizeof(char*), .text = std::string(text)};
   }
 
-  // Add up each step's offset; the last step names the field.
-  Place place{.offset = 0, .size = 0, .key = key};
-  while (!path.empty()) {
-    // Split off the next step.
-    const auto slash = path.find('/');
-    const auto step = path.substr(0, slash);
-    path = slash == std::string_view::npos ? std::string_view{} : path.substr(slash + 1);
+  // An enum key is its value, stored in the enum's size.
+  std::string_view value = text;
+  if (const auto dot = text.find('.'); dot != std::string_view::npos) {
+    if (text.substr(0, dot) != key_type) {
+      return std::unexpected("the key is a " + std::string(key_type));
+    }
+    value = text.substr(dot + 1);
+  }
+  const std::string type(key_type);
+  const std::string name(value);
+  auto size = gameinterop::SchemaEnumSizeOf(schema, module, type.c_str());
+  if (!size) {
+    return std::unexpected("cannot key by " + type);
+  }
+  if (*size != 1 && *size != 2 && *size != 4 && *size != 8) {
+    return std::unexpected(type + " has an invalid size");
+  }
+  auto resolved = gameinterop::SchemaEnumValueOf(schema, module, type.c_str(), name.c_str());
+  if (!resolved) {
+    return std::unexpected(resolved.error());
+  }
+  Key key{.size = *size};
+  std::memcpy(key.bytes.data(), &*resolved, *size);
+  return key;
+}
 
-    // Each step is Class.field.
+// ScriptValues is the layout of ModifierScriptValue_t and the key a path
+// selects in a modifier's script value list.
+struct ScriptValues {
+  size_t stride;
+  size_t key_offset;
+  size_t value_offset;
+  Key key;
+};
+
+// ResolveScriptValues resolves the layout of ModifierScriptValue_t and the
+// EModifierValue key a path names in an indexed CUtlVector< ModifierScriptValue_t >.
+std::expected<ScriptValues, std::string> ResolveScriptValues(void* schema, const char* module,
+                                                             std::string_view text) {
+  auto stride = gameinterop::SchemaClassSizeOf(schema, module, "ModifierScriptValue_t");
+  if (!stride) {
+    return std::unexpected(stride.error());
+  }
+  auto key =
+      gameinterop::SchemaFieldOf(schema, module, "ModifierScriptValue_t", "m_eModifierValue");
+  if (!key) {
+    return std::unexpected(key.error());
+  }
+  if (!key->type) {
+    return std::unexpected("modifier script value key has no type");
+  }
+  auto selected = KeyOf(schema, module, key->type, text);
+  if (!selected) {
+    return std::unexpected(selected.error());
+  }
+  auto value = gameinterop::SchemaFieldOf(schema, module, "ModifierScriptValue_t", "m_value");
+  if (!value) {
+    return std::unexpected(value.error());
+  }
+  if (key->size < selected->size || value->size < 4 * sizeof(float) ||
+      key->offset + selected->size > *stride || value->offset + 4 * sizeof(float) > *stride) {
+    return std::unexpected("modifier script value layout is invalid");
+  }
+  return ScriptValues{.stride = *stride,
+                      .key_offset = key->offset,
+                      .value_offset = value->offset,
+                      .key = std::move(*selected)};
+}
+
+// MapLookup is one map a path passes through: the map's offset from the
+// current base, the key it selects and its node layout. The selected value,
+// value_type spelled as the schema spells it, is the base of the rest of the
+// path.
+struct MapLookup {
+  size_t offset = 0;
+  Key key;
+  size_t value_offset;
+  size_t element_size;
+  std::string_view value_type;
+  size_t value_size;
+};
+
+// ResolveMapLookup resolves the key text for a field of map_type, a
+// CUtlOrderedMap< K, V > or CUtlMap< K, V >. A node's element is the key,
+// then the value at its own alignment.
+std::expected<MapLookup, std::string> ResolveMapLookup(void* schema, const char* module,
+                                                       std::string_view map_type,
+                                                       std::string_view text) {
+  // Split the map's key and value types.
+  std::string_view arguments;
+  for (const std::string_view map : {"CUtlOrderedMap< ", "CUtlMap< "}) {
+    if (map_type.starts_with(map) && map_type.ends_with(" >")) {
+      arguments = map_type.substr(map.size(), map_type.size() - map.size() - 2);
+    }
+  }
+  const auto comma = arguments.find(", ");
+  if (comma == std::string_view::npos) {
+    return std::unexpected("not a map");
+  }
+  const auto key_type = arguments.substr(0, comma);
+  const auto value_type = arguments.substr(comma + 2);
+
+  // Lay out the node's element.
+  auto key = KeyOf(schema, module, key_type, text);
+  if (!key) {
+    return std::unexpected(key.error());
+  }
+  auto key_layout = LayoutOf(schema, module, key_type);
+  auto value_layout = LayoutOf(schema, module, value_type);
+  if (!key_layout || !value_layout) {
+    return std::unexpected(!key_layout ? key_layout.error() : value_layout.error());
+  }
+  const size_t value_offset = AlignUp(key_layout->size, value_layout->alignment);
+  return MapLookup{
+      .key = std::move(*key),
+      .value_offset = value_offset,
+      .element_size = AlignUp(value_offset + value_layout->size,
+                              std::max(key_layout->alignment, value_layout->alignment)),
+      .value_type = value_type,
+      .value_size = value_layout->size,
+  };
+}
+
+// Place is where a field path leads in an entry's data: through each map in
+// maps, then offset from the last map's value or the entry's start, or one
+// entry of a modifier script value list there.
+struct Place {
+  std::vector<MapLookup> maps;
+  size_t offset = 0;
+  size_t size = 0;
+  size_t floats = 0;
+  std::string_view type;
+  std::string leaf;
+  std::optional<ScriptValues> script_values;
+};
+
+// FloatCount returns how many floats storage of a scalar, range or level-float
+// type holds, or zero when a float change cannot write it.
+size_t FloatCount(std::string_view type, size_t size) {
+  if (type == "CModifierLevelFloat" || type == "CSkillFloat" || type == "float32[4]") {
+    return size >= 4 * sizeof(float) ? 4 : 0;
+  }
+  if (type == "CRangeFloat" || type == "float32[2]") {
+    return size >= 2 * sizeof(float) ? 2 : 0;
+  }
+  if (type == "float32") {
+    return size >= sizeof(float) ? 1 : 0;
+  }
+  return type.empty() && size == sizeof(float) ? 1 : 0;
+}
+
+// ResolvePath resolves a path of Class.field steps separated by slashes, such
+// as CitadelAbilityVData.m_projectileInfo/ProjectileInfo_t.m_flSpeed. A step
+// on a map may end in [key], an enum value such as [EStatsType.EMaxHealth] or
+// the name of a symbol key such as [primary], and the next step reads the
+// selected value. A last step on a modifier's m_vecScriptValues list may end
+// in [EModifierValue.Value].
+std::expected<Place, std::string> ResolvePath(void* schema, const char* module,
+                                              std::string_view path) {
+  if (path.empty()) {
+    return std::unexpected("field path is empty");
+  }
+  Place place;
+  while (!path.empty()) {
+    // Split off the next step and its key.
+    const auto slash = path.find('/');
+    auto step = path.substr(0, slash);
+    path = slash == std::string_view::npos ? std::string_view{} : path.substr(slash + 1);
+    std::optional<std::string_view> key;
+    if (step.ends_with(']')) {
+      const auto open = step.rfind('[');
+      if (open == std::string_view::npos) {
+        return std::unexpected("a map key lacks its [");
+      }
+      key = step.substr(open + 1, step.size() - open - 2);
+      step = step.substr(0, open);
+    }
+
+    // Each step is Class.field; add its offset.
     const auto dot = step.find('.');
     if (dot == std::string_view::npos) {
       return std::unexpected("field path step lacks a class");
     }
     const std::string type(step.substr(0, dot));
     const std::string name(step.substr(dot + 1));
-
-    // Add its offset.
     auto field = gameinterop::SchemaFieldOf(schema, module, type.c_str(), name.c_str());
     if (!field) {
       return std::unexpected(field.error());
     }
     place.offset += field->offset;
     place.size = field->size;
-  }
+    place.type = field->type ? field->type : "";
+    place.floats = FloatCount(place.type, place.size);
+    const auto last_dot = name.rfind('.');
+    place.leaf = last_dot == std::string::npos ? name : name.substr(last_dot + 1);
+    if (!key) {
+      continue;
+    }
 
-  // A map value is one float.
-  if (place.key) {
-    place.size = sizeof(float);
+    // A key on a script value list selects one entry's level float, which
+    // ends the path.
+    if (field->list && place.type == "CUtlVector< ModifierScriptValue_t >") {
+      if (!path.empty()) {
+        return std::unexpected("a script value has no fields");
+      }
+      auto layout = ResolveScriptValues(schema, module, *key);
+      if (!layout) {
+        return std::unexpected(layout.error());
+      }
+      place.script_values = std::move(*layout);
+      place.type = {};
+      place.floats = 4;
+      place.size = 4 * sizeof(float);
+      break;
+    }
+
+    // A key on a map selects one value, the base of the rest of the path.
+    auto lookup = ResolveMapLookup(schema, module, place.type, *key);
+    if (!lookup) {
+      return std::unexpected(name + "[" + std::string(*key) + "]: " + lookup.error());
+    }
+    lookup->offset = place.offset;
+    place.offset = 0;
+    place.size = lookup->value_size;
+    place.type = lookup->value_type;
+    place.floats = FloatCount(place.type, place.size);
+    place.maps.push_back(std::move(*lookup));
   }
   return place;
 }
 
 // Locate returns the storage a place names in one entry's data, or null when
-// its map holds no such key.
+// a map or list on its path holds no such key.
 unsigned char* Locate(unsigned char* definition, const Place& place) {
-  // A field lies at its offset.
-  if (!place.key) {
-    return definition + place.offset;
+  // Enter each map's selected value.
+  unsigned char* base = definition;
+  for (const auto& map : place.maps) {
+    unsigned char* found = nullptr;
+    ForEachMapNode(base + map.offset, map.element_size, [&](unsigned char* element) {
+      if (!found && map.key.Matches(element)) {
+        found = element + map.value_offset;
+      }
+    });
+    if (!found) {
+      return nullptr;
+    }
+    base = found;
+  }
+  if (!place.script_values) {
+    return base + place.offset;
   }
 
-  // A map value follows its key.
-  unsigned char* found = nullptr;
-  ForEachMapNode(definition + place.offset, sizeof(int32_t) + sizeof(float),
-                 [&](unsigned char* element) {
-                   int32_t key = 0;
-                   std::memcpy(&key, element, sizeof(key));
-                   if (key == *place.key) {
-                     found = element + sizeof(key);
-                   }
-                 });
-  return found;
+  // A modifier script value sits in a CUtlVector of ModifierScriptValue_t.
+  const auto& values = *place.script_values;
+  const auto list = gameinterop::ReadUtlVector<unsigned char>(base + place.offset, 256);
+  if (!list) {
+    return nullptr;
+  }
+  for (int32_t i = 0; i < list->count; ++i) {
+    auto* element = list->data + static_cast<size_t>(i) * values.stride;
+    if (values.key.Matches(element + values.key_offset)) {
+      return element + values.value_offset;
+    }
+  }
+  return nullptr;
 }
 
-// Change applies one entry's properties, fields and copies, keeping what
-// they overwrite in undo, and adds its problems.
-void Change(const Definition& change, unsigned char* definition, void* schema, const char* module,
-            const gameinterop::ModuleImage& image, DefinitionUndo& undo,
-            std::vector<std::string>& problems) {
-  if (!change.upgrades().empty() || !change.upgrade_order().empty()) {
-    auto layout = ResolveAbilityUpgradeLayout(schema, module);
-    if (!layout) {
-      problems.push_back(layout.error());
-      return;
-    }
-    auto applied = ApplyAbilityUpgrades(definition, change, *layout, undo);
-    if (!applied) {
-      problems.push_back(applied.error());
-    }
-    return;
+// kBufferStringInlineEmpty is the allocated word of an empty CBufferString.
+constexpr uint32_t kBufferStringInlineEmpty = 0xc0000008u;
+
+// kBufferStringAllowHeap marks a CBufferString whose borrowed characters the
+// game may replace with a heap allocation without freeing the borrowed pointer.
+constexpr uint32_t kBufferStringAllowHeap = 0x80000000u;
+
+// kBufferStringMaxLength bounds the 30-bit capacity of a CBufferString.
+constexpr size_t kBufferStringMaxLength = 0x3ffffffeu;
+
+// BufferString is the 16-byte CBufferString header that CSoundEventName and
+// CPanoramaImageName hold in parsed VData. Purge frees chars only when bit 31
+// of length is set, so borrowed interned characters with bit 31 clear are
+// never freed when a world unloads.
+struct BufferString {
+  uint32_t length;
+  uint32_t allocated;
+  const char* chars;
+};
+
+static_assert(sizeof(BufferString) == 16);
+
+// WriteTextField writes value into the text, symbol, sound event or Panorama
+// image field at place, keeping the overwritten bytes in undo, and returns any
+// problem it hits.
+std::string WriteTextField(unsigned char* definition, const Place& place, std::string_view value,
+                           const DefinitionText& text, bool world, DefinitionUndo& undo) {
+  // Refuse console/script fields and non-text schema types.
+  if (place.type.empty()) {
+    return "not a text field";
   }
-  if (change.file() == Definition::FILE_MODIFIERS) {
-    if (!change.properties().empty() || !change.copy_fields().empty()) {
-      problems.push_back("modifiers support only direct float fields");
-      return;
-    }
-    std::vector<std::pair<unsigned char*, float>> writes;
-    for (const auto& [path, value] : change.fields()) {
-      auto storage = ResolveModifierFloat(image, schema, module, definition, path);
-      if (!storage || !std::isfinite(value)) {
-        problems.push_back(path + ": " + (!storage ? storage.error() : "value must be finite"));
-        continue;
-      }
-      writes.emplace_back(*storage, value);
-    }
-    if (!problems.empty()) {
-      return;
-    }
-    for (const auto& [storage, value] : writes) {
-      undo.Save(storage, sizeof(value), false);
-      float actual = 0;
-      if (!gameinterop::WriteNative(storage, &value, sizeof(value)) ||
-          !gameinterop::ReadNative(storage, &actual, sizeof(actual)) || actual != value) {
-        problems.push_back("modifier field write or readback failed");
-      }
-    }
-    return;
+  if (auto refused = RefuseField(place.leaf); !refused.empty()) {
+    return refused;
   }
-  const bool world = change.file() == Definition::FILE_HEROES;
-  SetProperties(definition, schema, module,
-                {change.properties().begin(), change.properties().end()}, undo, problems);
-  for (const auto& [path, value] : change.fields()) {
-    auto place = ResolvePath(schema, module, path);
-    auto* storage = place && place->size == sizeof(value) ? Locate(definition, *place) : nullptr;
-    if (!storage) {
-      problems.push_back(path + ": " +
-                         (!place                         ? place.error()
-                          : place->size != sizeof(value) ? "not a float"
-                                                         : "no such map key"));
-      continue;
+  auto* storage = Locate(definition, place);
+  if (storage == nullptr) {
+    return "no such map key";
+  }
+  std::string expanded = WithAddon(std::string(value), text.addon);
+  const std::string_view type = place.type;
+
+  // Write an 8-byte symbol or CUtlString pointer. The game frees a CUtlString
+  // and compares a CGlobalSymbol by pointer, so each takes the game's own
+  // memory; an empty CUtlString is null.
+  if (type == "CUtlSymbolLarge" || type == "CGlobalSymbol" || type == "CUtlString") {
+    if (place.size < sizeof(const char*)) {
+      return "not a text field";
     }
+    const char* chars = nullptr;
+    if (type == "CGlobalSymbol") {
+      chars = text.intern_symbol(expanded.c_str());
+      if (chars == nullptr) {
+        return "the game's symbol table is unavailable";
+      }
+    } else if (type == "CUtlString") {
+      if (!expanded.empty()) {
+        auto* owned = static_cast<char*>(text.allocate(expanded.size() + 1));
+        if (owned == nullptr) {
+          return "the game's allocator is unavailable";
+        }
+        std::memcpy(owned, expanded.c_str(), expanded.size() + 1);
+        chars = owned;
+      }
+    } else {
+      chars = Interned(std::move(expanded));
+    }
+    undo.Save(storage, sizeof(chars), world);
+    std::memcpy(storage, &chars, sizeof(chars));
+    return {};
+  }
+
+  // Write a 16-byte CBufferString for sound events and Panorama images.
+  if (type == "CSoundEventName" || type == "CPanoramaImageName") {
+    if (place.size < sizeof(BufferString)) {
+      return "not a text field";
+    }
+    if (expanded.size() > kBufferStringMaxLength) {
+      return "text is too long";
+    }
+    const BufferString value =
+        expanded.empty()
+            ? BufferString{.length = 0, .allocated = kBufferStringInlineEmpty, .chars = nullptr}
+            : BufferString{
+                  .length = static_cast<uint32_t>(expanded.size()),
+                  .allocated = kBufferStringAllowHeap | static_cast<uint32_t>(expanded.size() + 1),
+                  .chars = Interned(std::move(expanded))};
     undo.Save(storage, sizeof(value), world);
     std::memcpy(storage, &value, sizeof(value));
+    return {};
   }
-  for (const auto& [target, source] : change.copy_fields()) {
-    auto to = ResolvePath(schema, module, target);
-    auto from = ResolvePath(schema, module, source);
-    auto* to_storage = to ? Locate(definition, *to) : nullptr;
-    auto* from_storage = from ? Locate(definition, *from) : nullptr;
-    if (!to_storage || !from_storage || to->size != from->size || !to->size) {
-      problems.push_back(target + ": cannot copy " + source);
-      continue;
-    }
-    undo.Save(to_storage, to->size, world);
-    std::memmove(to_storage, from_storage, to->size);
-  }
+
+  return "not a text field";
 }
 
 // Missing is why an entry was not found: later while its data is still
@@ -311,27 +600,10 @@ class Entries {
       }
       case Definition::FILE_NPC_UNITS:
         return FindSubclass(units_, gameinterop::AbilityDefinitions::kNpcUnits, change);
-      case Definition::FILE_MODIFIERS: {
-        if (!modifier_lookup_) {
-          modifier_lookup_ = gameinterop::ResolveSignature(module_, "vdata.lookup-by-hash");
-        }
-        if (!*modifier_lookup_) {
-          return std::unexpected(Missing{.error = modifier_lookup_->error(), .later = false});
-        }
-        auto definition = FindModifierDefinition(
-            reinterpret_cast<gameinterop::AbilityDefinitions::Lookup>(**modifier_lookup_),
-            change.entry());
-        if (!definition) {
-          return std::unexpected(
-              Missing{.error = definition.error(),
-                      .later = definition.error() == "modifier definition is not loaded"});
-        }
-        return *definition;
-      }
-      case Definition::FILE_ABILITIES:
-        return FindSubclass(abilities_, gameinterop::AbilityDefinitions::kAbilities, change);
+      case Definition::FILE_MODIFIERS:
+        return FindSubclass(modifiers_, gameinterop::AbilityDefinitions::kModifiers, change);
       default:
-        return std::unexpected(Missing{.error = "unsupported definition file", .later = false});
+        return FindSubclass(abilities_, gameinterop::AbilityDefinitions::kAbilities, change);
     }
   }
 
@@ -361,7 +633,7 @@ class Entries {
   const char* module_name_;
   Subclasses abilities_;
   Subclasses units_;
-  std::optional<std::expected<void*, std::string>> modifier_lookup_;
+  Subclasses modifiers_;
   std::optional<std::expected<gameinterop::HeroDefinitions, std::string>> heroes_;
   std::optional<std::expected<gameinterop::BotDifficultyDefinitions, std::string>> bots_;
 };
@@ -404,9 +676,70 @@ void DefinitionUndo::ForgetWorld() {
   std::erase_if(saved_, [](const Saved& saved) { return saved.world; });
 }
 
+std::vector<std::string> ChangeDefinition(const Definition& change, unsigned char* definition,
+                                          void* schema, const char* module_name,
+                                          DefinitionUndo& undo, const DefinitionText& text) {
+  // An entry of native ability tiers changes only those tiers.
+  std::vector<std::string> problems;
+  if (!change.upgrades().empty() || !change.upgrade_order().empty()) {
+    auto layout = ResolveAbilityUpgradeLayout(schema, module_name);
+    if (!layout) {
+      problems.push_back(layout.error());
+    } else if (auto applied = ApplyAbilityUpgrades(definition, change, *layout, undo); !applied) {
+      problems.push_back(applied.error());
+    }
+    return problems;
+  }
+
+  // Apply properties, numeric fields, copied fields and text fields in turn.
+  const bool world = change.file() == Definition::FILE_HEROES;
+  SetProperties(definition, schema, module_name,
+                {change.properties().begin(), change.properties().end()}, undo, problems);
+  for (const auto& [path, value] : change.fields()) {
+    auto place = ResolvePath(schema, module_name, path);
+    auto* storage = place && place->floats ? Locate(definition, *place) : nullptr;
+    if (!storage) {
+      problems.push_back(path + ": " +
+                         (!place           ? place.error()
+                          : !place->floats ? "not a float"
+                                           : "no such map key"));
+      continue;
+    }
+    const std::array<float, 4> values{value, value, value, value};
+    const size_t bytes = place->floats * sizeof(value);
+    undo.Save(storage, bytes, world);
+    std::memcpy(storage, values.data(), bytes);
+  }
+  for (const auto& [target, source] : change.copy_fields()) {
+    auto to = ResolvePath(schema, module_name, target);
+    auto from = ResolvePath(schema, module_name, source);
+    auto* to_storage = to ? Locate(definition, *to) : nullptr;
+    auto* from_storage = from ? Locate(definition, *from) : nullptr;
+    if (!to_storage || !from_storage || to->size != from->size || !to->size) {
+      problems.push_back(target + ": cannot copy " + source);
+      continue;
+    }
+    undo.Save(to_storage, to->size, world);
+    std::memmove(to_storage, from_storage, to->size);
+  }
+  for (const auto& [path, value] : change.text_fields()) {
+    auto place = ResolvePath(schema, module_name, path);
+    if (!place) {
+      problems.push_back(path + ": " + place.error());
+      continue;
+    }
+    if (auto problem = WriteTextField(definition, *place, value, text, world, undo);
+        !problem.empty()) {
+      problems.push_back(path + ": " + problem);
+    }
+  }
+  return problems;
+}
+
 std::expected<std::vector<std::string>, std::string> ChangeDefinitions(
     const gameinterop::ModuleImage& module, void* schema, const char* module_name,
-    const google::protobuf::RepeatedPtrField<Definition>& definitions, DefinitionUndo& undo) {
+    const google::protobuf::RepeatedPtrField<Definition>& definitions, DefinitionUndo& undo,
+    const DefinitionText& text) {
   // Find every entry first, so a module still loading its data takes no
   // partial change. An entry the module can never find is reported and
   // skipped.
@@ -434,21 +767,36 @@ std::expected<std::vector<std::string>, std::string> ChangeDefinitions(
     if (!found[index]) {
       continue;
     }
-    std::vector<std::string> own;
-    Change(definitions[index], found[index], schema, module_name, module, undo, own);
-    for (auto& problem : own) {
+    for (auto& problem :
+         ChangeDefinition(definitions[index], found[index], schema, module_name, undo, text)) {
       problems.push_back(definitions[index].entry() + ": " + problem);
     }
   }
   return problems;
 }
 
+std::expected<float, std::string> ReadDefinitionFloat(unsigned char* definition, void* schema,
+                                                      const char* module_name,
+                                                      std::string_view path) {
+  auto place = ResolvePath(schema, module_name, path);
+  if (!place) {
+    return std::unexpected(place.error());
+  }
+  if (!place->floats) {
+    return std::unexpected("not a float");
+  }
+  auto* storage = Locate(definition, *place);
+  if (!storage) {
+    return std::unexpected("no such map key");
+  }
+  float value = 0;
+  std::memcpy(&value, storage, sizeof(value));
+  return value;
+}
+
 std::expected<float, std::string> ReadDefinitionFloat(const gameinterop::ModuleImage& module,
                                                       void* schema, const char* module_name,
                                                       const DefinitionFieldOptions& request) {
-  if (request.file() != Definition::FILE_MODIFIERS) {
-    return std::unexpected("definition readback currently supports modifiers only");
-  }
   Definition definition;
   definition.set_file(request.file());
   definition.set_entry(request.entry());
@@ -457,12 +805,7 @@ std::expected<float, std::string> ReadDefinitionFloat(const gameinterop::ModuleI
   if (!found) {
     return std::unexpected(found.error().error);
   }
-  auto storage = ResolveModifierFloat(module, schema, module_name, *found, request.field());
-  float value = 0;
-  if (!storage || !gameinterop::ReadNative(*storage, &value, sizeof(value))) {
-    return std::unexpected(!storage ? storage.error() : "definition readback failed");
-  }
-  return value;
+  return ReadDefinitionFloat(*found, schema, module_name, request.field());
 }
 
 }  // namespace modlock::wasm

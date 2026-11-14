@@ -152,8 +152,8 @@ message Definition {
     // other units, and the bot brain (npc_player_bot_brain) every bot shares.
     FILE_NPC_UNITS = 3;
 
-    // FILE_MODIFIERS names embedded modifier definitions by ability/modifier.
-    // Fields must name a direct float of the modifier's exact schema class.
+    // FILE_MODIFIERS is scripts/modifiers.vdata, the standalone modifiers, and
+    // the modifiers embedded in abilities, named as <ability>/<modifier>.
     FILE_MODIFIERS = 4;
   }
 
@@ -168,16 +168,30 @@ message Definition {
   // AbilityCooldown. Only abilities have properties.
   map<string, float> properties = 3;
 
-  // Fields writes float schema fields, named as a path of Class.field steps
-  // from the entry's data, such as
-  // CitadelAbilityVData.m_projectileInfo/ProjectileInfo_t.m_flSpeed. A last
-  // step may name one value of an enum-keyed map, such as
-  // CitadelHeroData_t.m_mapStartingStats[EStatsType.EMaxHealth].
+  // Fields writes float schema fields, including CModifierLevelFloat,
+  // CSkillFloat and CRangeFloat, named as a path of Class.field steps from the
+  // entry's data, such as
+  // CitadelAbilityVData.m_projectileInfo/ProjectileInfo_t.m_flSpeed. A step on
+  // a map may select one value by its key, an enum value or a name, and the
+  // next step reads inside it, such as
+  // CitadelHeroData_t.m_mapStartingStats[EStatsType.EMaxHealth] or
+  // CitadelAbilityVData.m_mapWeaponInfos[primary]/CCitadelWeaponInfo.m_flBulletSpeed.
+  // A last step may select one modifier script value, such as
+  // CModifierVData.m_vecScriptValues[EModifierValue.MODIFIER_VALUE_MODEL_SCALE].
+  // One value fills every level of a level float or script value and both
+  // bounds of a range.
   map<string, float> fields = 4;
 
   // CopyFields copies the field at each value's path over the field at its
   // key's path; both must be the same size.
   map<string, string> copy_fields = 5;
+
+  // TextFields writes text, symbol, sound event and Panorama image schema
+  // fields, named as a path of Class.field steps from the entry's data. Each
+  // {addon} in a value becomes the mod's content addon.
+  map<string, string> text_fields = 6;
+
+  // Fields from 100 on belong to the Hideout fork, clear of upstream's numbers.
 
   // Upgrade replaces existing numeric bonuses in one native ability tier.
   // Values use engine units and replace both normal and Street Brawl bonuses.
@@ -191,23 +205,25 @@ message Definition {
   // Upgrades requires FILE_ABILITIES and a separate entry from properties,
   // fields and copy_fields. All requested rows are validated before writing;
   // a failed native write attempts to restore every affected bonus.
-  repeated Upgrade upgrades = 6;
+  repeated Upgrade upgrades = 100;
 
   // UpgradeOrder permutes native tier property vectors from their original order.
   // [2, 3, 1] makes original tier 2 the first tier, tier 3 second and tier 1 third.
   // It must contain each native tier exactly once. Costs remain unchanged.
   // Upgrades in this entry address the resulting tiers. The same FILE_ABILITIES
   // and separate-entry requirements apply, including when upgrades is empty.
-  repeated uint32 upgrade_order = 7;
+  repeated uint32 upgrade_order = 101;
 }
 
-// DefinitionFieldOptions reads a direct float from a modifier definition.
+// DefinitionFieldOptions names a float field of a definition entry by the
+// same file, entry and path a Definition's fields use.
 message DefinitionFieldOptions {
   Definition.File file = 1;
   string entry = 2;
   string field = 3;
 }
 
+// DefinitionFieldResponse is the field's first float.
 message DefinitionFieldResponse {
   float value = 1;
 }

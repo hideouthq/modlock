@@ -239,15 +239,15 @@ export function serve(service: string, handler: Service): void {
  * command calls handler when a player types /name in chat or their client
  * sends the console command name to the server. The handler runs with the
  * next server frame, before the frame handlers, and receives the text after
- * the name, trimmed of surrounding spaces. Names are lower case and match
- * whatever case the player types. Registering a name again replaces its
- * handler.
+ * the name, trimmed of surrounding spaces. Names match whatever case the
+ * mod registers and the player types. Registering a name again, in any case,
+ * replaces its handler.
  */
 export function command(
   name: string,
   handler: (player: Player, args: string) => void,
 ): void {
-  commands.set(name, { handler })
+  commands.set(name.toLowerCase(), { handler })
 }
 
 /**

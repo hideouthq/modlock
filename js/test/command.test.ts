@@ -166,6 +166,24 @@ test('native command names are case insensitive while arguments retain their cas
   expect(seen).toEqual(['MixedCase', 'OtherCase'])
 })
 
+test('a command registered in mixed case matches in any case', () => {
+  const seen: string[] = []
+  command('MyCmd', (_player, args) => seen.push(`first ${args}`))
+  frame(16)
+  expect(send(3, 'MyCmd A')).toBe(true)
+  expect(send(3, 'mycmd B')).toBe(true)
+  expect(send(3, 'MYCMD\tC')).toBe(true)
+  frame(16.016)
+  expect(seen).toEqual(['first A', 'first B', 'first C'])
+
+  // Registering the name again in another case replaces the handler.
+  command('MYCMD', (_player, args) => seen.push(`second ${args}`))
+  seen.length = 0
+  send(3, 'MyCmd D')
+  frame(16.032)
+  expect(seen).toEqual(['second D'])
+})
+
 test('a command that throws does not stop the frame', () => {
   // The failing command logs, and the next one and the frame handlers still run.
   const seen: string[] = []

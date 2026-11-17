@@ -47,12 +47,13 @@ const Built = "built"
 //go:embed all:built
 var built embed.FS
 
-// Sources holds the library modules that import nothing, so a Go module that
-// vendors Modlock keeps them and its browser pages can import them beside its
-// own TypeScript: the HUD kit's tokens, the hero table and the HUD text
-// helpers, which a page drawn in the game's look shares with its mods.
+// Sources holds the library's whole TypeScript source, so a Go module that
+// vendors Modlock keeps the library at the version it pins: its type checker
+// can resolve modlock to src/index.ts, and its browser pages can import a
+// module such as the HUD kit's tokens beside their own TypeScript. The
+// protobuf messages the source imports are vendored with their own packages.
 //
-//go:embed src/theme.ts src/heroes.ts src/format.ts
+//go:embed src
 var Sources embed.FS
 
 // Renderer is the built renderer's file name, which a client content package
@@ -409,8 +410,8 @@ func Build(ctx context.Context, source, out string) error {
 		}
 	}
 
-	// Bundle the library, the entity classes, the console, the renderer and
-	// the pages.
+	// Bundle the library, the entity classes, the console, the renderer, the
+	// layout library and the pages, which run the layout library as well.
 	bundles := []struct {
 		name    string
 		options api.BuildOptions
@@ -420,6 +421,7 @@ func Build(ctx context.Context, source, out string) error {
 		{"console.js", api.BuildOptions{EntryPoints: []string{"js/src/console.ts"}, Format: api.FormatESModule, Target: api.ES2023, External: []string{"modlock"}}},
 		{Renderer, api.BuildOptions{EntryPoints: []string{"panorama/src/main.ts"}, Format: api.FormatIIFE, Target: api.ES2020, MinifyWhitespace: true, MinifyIdentifiers: true, MinifySyntax: true}},
 		{LayoutLibrary, api.BuildOptions{EntryPoints: []string{"panorama/src/layout.ts"}, Format: api.FormatIIFE, GlobalName: "Modlock", Target: api.ES2020, MinifySyntax: true}},
+		{Preview + "/" + LayoutLibrary, api.BuildOptions{EntryPoints: []string{"panorama/src/layout.ts"}, Format: api.FormatIIFE, GlobalName: "Modlock", Target: api.ES2020, MinifySyntax: true}},
 		{Preview + "/preview.js", api.BuildOptions{EntryPoints: []string{"panorama/browser/preview.ts"}, Format: api.FormatIIFE, Target: api.ES2022, MinifySyntax: true}},
 		{Studio + "/studio.js", api.BuildOptions{
 			EntryPoints: []string{"studio/web/main.tsx"}, Format: api.FormatIIFE, Target: api.ES2022,

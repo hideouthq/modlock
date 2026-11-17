@@ -32,6 +32,7 @@
 #include "wasm/metrics.h"
 #include "wasm/player_scope.h"
 #include "wasm/runtime.h"
+#include "wasm/service_calls.h"
 #include "wasm/settings.h"
 #include "wasm/ui.h"
 
@@ -49,6 +50,9 @@ struct Mods {
   std::map<std::string, WasmPlugin*, std::less<>> plugins;
   // extensions holds the services the host provides, by name.
   std::map<std::string, WasmExtension, std::less<>> extensions;
+  // late_extensions holds the services the host answers in a later frame,
+  // by name.
+  std::map<std::string, WasmLateExtension, std::less<>> late_extensions;
   // settings keeps players' settings: kept unless the host was given a
   // keeper.
   FileSettings kept;
@@ -92,6 +96,8 @@ class PluginGame final : public wasm::Game {
   std::expected<wasm::players::PlayersResponse, std::string> Players() override;
   std::expected<wasm::ServiceReply, std::string> CallService(
       const wasm::ServiceCall& request) override;
+  std::expected<wasm::ServiceCallStarted, std::string> StartServiceCall(
+      const wasm::StartServiceCallRequest& request) override;
   std::expected<wasm::settings::SettingResponse, std::string> PlayerSetting(
       const wasm::settings::PlayerSettingRequest& request) override;
   std::expected<void, std::string> SetPlayerSetting(
@@ -133,6 +139,7 @@ class WasmPlugin final : public Plugin {
         slug_(std::move(slug)),
         engine_(context.engine),
         check_only_(context.check_only),
+        enforce_required_services_(context.enforce_required_services),
         mod_([this](const wasm::Call& call) { return Send(call); }),
         game_(*this, host, context.engine) {
     for (int i = 1; i < context.argc; ++i) {
@@ -212,6 +219,11 @@ class WasmPlugin final : public Plugin {
   // it.
   std::expected<void, std::string> Input(int32_t slot, std::string_view line);
 
+  // Action delivers a press a layout the mod shows the player in slot sent:
+  // line is the layout's id, the action and the payload as UiTrees::Action
+  // reads them.
+  std::expected<void, std::string> Action(int32_t slot, std::string_view line);
+
   // Serve delivers one call to a service the mod serves and returns its answer.
   std::expected<std::string, std::string> Serve(const wasm::ServiceCall& call);
 
@@ -223,6 +235,11 @@ class WasmPlugin final : public Plugin {
 
   // CallService answers the mod's call to a service the host provides.
   std::expected<wasm::ServiceReply, std::string> CallService(const wasm::ServiceCall& call);
+
+  // StartServiceCall starts the mod's call to a service the host provides,
+  // which a later frame ends with a ServiceReplied event.
+  std::expected<wasm::ServiceCallStarted, std::string> StartServiceCall(
+      const wasm::StartServiceCallRequest& request);
 
   // PlayerSetting returns the value of the setting named key for the player
   // in slot: the kept value while the manifest still accepts it, and the
@@ -351,6 +368,9 @@ class WasmPlugin final : public Plugin {
   // DeliverGameEvents passes on the button changes and ended restores the
   // game queued.
   void DeliverGameEvents();
+  // DeliverServiceReplies tells the mod of each started service call that
+  // ended.
+  void DeliverServiceReplies();
   void Unsubscribe();
   // Move installs the manifest's movement model on the server.
   void Move();
@@ -383,6 +403,8 @@ class WasmPlugin final : public Plugin {
   // check_only_ is true when the host only checks the mod, which the mod
   // hears at its start.
   bool check_only_;
+  // Admission policy is fixed for this plugin, including reloads.
+  const bool enforce_required_services_;
   std::vector<std::string> args_;
   std::unique_ptr<wasm::Instance> instance_;
   // module_ is the running build's WebAssembly, which a restart instantiates
@@ -518,6 +540,10 @@ class WasmPlugin final : public Plugin {
   std::chrono::steady_clock::duration slowest_{};
   std::string slowest_report_;
   wasm::profile::SlowFrame slowest_frame_;
+
+  // service_calls_ holds the running instance's started service calls until
+  // a frame delivers their ends.
+  wasm::ServiceCalls service_calls_;
 
   // calls_ counts the mod's host calls since calls_reported_, the last time
   // they went to the observers.

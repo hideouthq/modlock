@@ -1,0 +1,595 @@
+package persist
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/paralin/modlock/src/wasm"
+	persistpb "github.com/paralin/modlock/src/wasm/persist"
+)
+
+// newStore returns a store of the records kept in dir without its lock, for
+// tests that stand in for one host.
+func newStore(dir string) *Store {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		panic(err)
+	}
+	return &Store{dir: dir, root: root}
+}
+
+// stats is the record type the tests keep: a prop hunt mod's player stats.
+var stats = &persistpb.RecordType{
+	Name:    "stats",
+	Writers: persistpb.Writers_WRITERS_SERVERS,
+	Fields: map[string]*persistpb.Field{
+		"roundsWon": {Kind: persistpb.Field_KIND_COUNT},
+		"score":     {Kind: persistpb.Field_KIND_NUMBER},
+		"bestHide":  {Kind: persistpb.Field_KIND_MAX},
+		"title":     {Kind: persistpb.Field_KIND_STRING, MaxBytes: 8},
+		"unlocks":   {Kind: persistpb.Field_KIND_TAGS},
+	},
+}
+
+// manifest declares stats and the persist service.
+func manifest() *wasm.Manifest {
+	return &wasm.Manifest{
+		Slug:     "prophunt",
+		Services: []*wasm.Service{{Name: Service}},
+		Persist:  []*persistpb.RecordType{stats},
+	}
+}
+
+func add(field string, n float64) *persistpb.Op {
+	return &persistpb.Op{Field: field, Op: &persistpb.Op_Add{Add: n}}
+}
+
+func setText(field, text string) *persistpb.Op {
+	return &persistpb.Op{Field: field, Op: &persistpb.Op_Set{Set: &persistpb.Value{Value: &persistpb.Value_Text{Text: text}}}}
+}
+
+func insert(field, tag string) *persistpb.Op {
+	return &persistpb.Op{Field: field, Op: &persistpb.Op_Insert{Insert: tag}}
+}
+
+// refused fails t unless err is a Refusal containing text.
+func refused(t *testing.T, err error, text string) {
+	t.Helper()
+	var refusal Refusal
+	if !errors.As(err, &refusal) || !strings.Contains(err.Error(), text) {
+		t.Fatalf("want a refusal naming %q, got %v", text, err)
+	}
+}
+
+func TestValidate(t *testing.T) {
+	// Check a valid declaration before varying individual manifest constraints.
+	if err := Validate(manifest()); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]func(*wasm.Manifest){
+		"no persist service": func(m *wasm.Manifest) { m.Services = nil },
+		"no record types":    func(m *wasm.Manifest) { m.Persist = nil },
+		"twice": func(m *wasm.Manifest) {
+			m.Persist = append(m.Persist, stats)
+		},
+		"name": func(m *wasm.Manifest) {
+			m.Persist = []*persistpb.RecordType{{Name: "9lives", Writers: persistpb.Writers_WRITERS_SERVERS, Fields: stats.Fields}}
+		},
+		"writers": func(m *wasm.Manifest) {
+			m.Persist = []*persistpb.RecordType{{Name: "stats", Fields: stats.Fields}}
+		},
+		"no fields": func(m *wasm.Manifest) {
+			m.Persist = []*persistpb.RecordType{{Name: "stats", Writers: persistpb.Writers_WRITERS_SERVERS}}
+		},
+		"kind": func(m *wasm.Manifest) {
+			m.Persist = []*persistpb.RecordType{{Name: "stats", Writers: persistpb.Writers_WRITERS_SERVERS, Fields: map[string]*persistpb.Field{"a": {}}}}
+		},
+		"maxBytes on a count": func(m *wasm.Manifest) {
+			m.Persist = []*persistpb.RecordType{{Name: "stats", Writers: persistpb.Writers_WRITERS_SERVERS, Fields: map[string]*persistpb.Field{"a": {Kind: persistpb.Field_KIND_COUNT, MaxBytes: 4}}}}
+		},
+	}
+	for name, change := range cases {
+		m := manifest()
+		change(m)
+		if Validate(m) == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+	m := manifest()
+	for i := range TypeLimit {
+		m.Persist = append(m.Persist, &persistpb.RecordType{Name: "t" + strconv.Itoa(i), Writers: persistpb.Writers_WRITERS_SERVERS, Fields: stats.Fields})
+	}
+	if Validate(m) == nil {
+		t.Error("too many types: want an error")
+	}
+}
+
+func TestApplyRules(t *testing.T) {
+	// Each kind takes its own operations.
+	next, repeated, err := Apply(stats, nil, []*persistpb.Op{
+		add("roundsWon", 2),
+		add("score", -1.5),
+		{Field: "bestHide", Op: &persistpb.Op_Max{Max: 30}},
+		{Field: "bestHide", Op: &persistpb.Op_Max{Max: 12}},
+		setText("title", "hider"),
+		insert("unlocks", "cone"),
+		insert("unlocks", "barrel"),
+		insert("unlocks", "cone"),
+	}, "round-1")
+	if err != nil || repeated {
+		t.Fatal(err, repeated)
+	}
+	fields := next.GetRecord().GetFields()
+	if fields["roundsWon"].GetNumber() != 2 || fields["score"].GetNumber() != -1.5 || fields["bestHide"].GetNumber() != 30 {
+		t.Fatalf("numbers: %v", fields)
+	}
+	if fields["title"].GetText() != "hider" || strings.Join(fields["unlocks"].GetTags().GetMembers(), ",") != "barrel,cone" {
+		t.Fatalf("text and tags: %v", fields)
+	}
+	if next.GetVersion() != 1 || len(next.GetRecentKeys()) != 1 {
+		t.Fatalf("version %d keys %v", next.GetVersion(), next.GetRecentKeys())
+	}
+
+	// Each wrong operation is refused and the record is left as it was.
+	wrong := map[string]*persistpb.Op{
+		"cannot take max":    {Field: "roundsWon", Op: &persistpb.Op_Max{Max: 3}},
+		"from zero up":       add("roundsWon", -1),
+		"cannot take add":    add("bestHide", 1),
+		"holds up to 8":      setText("title", "far too long"),
+		"declares no field":  add("kills", 1),
+		"cannot take insert": insert("title", "x"),
+		"takes tags of 1":    insert("unlocks", ""),
+		"names no operation": {Field: "score"},
+	}
+	for text, op := range wrong {
+		_, _, err := Apply(stats, next, []*persistpb.Op{add("roundsWon", 1), op}, "round-2")
+		refused(t, err, text)
+	}
+	if next.GetRecord().GetFields()["roundsWon"].GetNumber() != 2 {
+		t.Fatal("a refused update changed the record it was given")
+	}
+}
+
+func TestApplyKeys(t *testing.T) {
+	// An add without a key is refused, since a resend would count it twice;
+	// other changes need none.
+	_, _, err := Apply(stats, nil, []*persistpb.Op{setText("title", "hider"), add("roundsWon", 1)}, "")
+	refused(t, err, "adds needs an update key")
+	if _, _, err := Apply(stats, nil, []*persistpb.Op{setText("title", "hider"), insert("unlocks", "cone")}, ""); err != nil {
+		t.Fatal("a keyless update without an add was refused", err)
+	}
+
+	// A key seen among the recent keys is left out.
+	next, _, err := Apply(stats, nil, []*persistpb.Op{add("roundsWon", 1)}, "round-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, repeated, err := Apply(stats, next, []*persistpb.Op{add("roundsWon", 1)}, "round-1")
+	if err != nil || !repeated || again.GetRecord().GetFields()["roundsWon"].GetNumber() != 1 || again.GetVersion() != 1 {
+		t.Fatalf("repeat: %v %v %v", again, repeated, err)
+	}
+
+	// Only the last RecentKeys are kept, so the oldest key counts again.
+	for i := 2; i <= RecentKeys+1; i++ {
+		if next, _, err = Apply(stats, next, []*persistpb.Op{add("roundsWon", 1)}, "round-"+strconv.Itoa(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(next.GetRecentKeys()) != RecentKeys || next.GetRecentKeys()[0] != "round-2" {
+		t.Fatalf("keys: %d, first %s", len(next.GetRecentKeys()), next.GetRecentKeys()[0])
+	}
+	if _, repeated, _ := Apply(stats, next, []*persistpb.Op{add("roundsWon", 1)}, "round-1"); repeated {
+		t.Fatal("a key past the recent ones is still a repeat")
+	}
+}
+
+// TestApplyKinds refuses, changing nothing, an op on a value an earlier build
+// stored as another kind than the field's now, and keeps applying ops to
+// values of the field's kind.
+func TestApplyKinds(t *testing.T) {
+	// An earlier build counted title and kept unlocks as text.
+	stored := &persistpb.StoredRecord{Record: &persistpb.Record{Fields: map[string]*persistpb.Value{
+		"title":     {Value: &persistpb.Value_Number{Number: 3}},
+		"unlocks":   {Value: &persistpb.Value_Text{Text: "cone"}},
+		"roundsWon": {Value: &persistpb.Value_Number{Number: 2}},
+	}}, Kinds: map[string]persistpb.Field_Kind{
+		"title":     persistpb.Field_KIND_COUNT,
+		"unlocks":   persistpb.Field_KIND_STRING,
+		"roundsWon": persistpb.Field_KIND_COUNT,
+	}}
+	_, _, err := Apply(stats, stored, []*persistpb.Op{setText("title", "hider")}, "")
+	refused(t, err, "another kind than this release's KIND_STRING")
+	_, _, err = Apply(stats, stored, []*persistpb.Op{insert("unlocks", "hat")}, "")
+	refused(t, err, "another kind than this release's KIND_TAGS")
+	if stored.GetRecord().GetFields()["title"].GetNumber() != 3 {
+		t.Fatal("a refused update changed the record it was given")
+	}
+
+	// A field whose value is of its kind still takes its ops.
+	next, _, err := Apply(stats, stored, []*persistpb.Op{add("roundsWon", 1)}, "round-1")
+	if err != nil || next.GetRecord().GetFields()["roundsWon"].GetNumber() != 3 {
+		t.Fatal(next, err)
+	}
+}
+
+// TestApplyNumberKinds refuses an op on a number stored by a field of another
+// of the three number kinds, for each pair both ways, so a count never adds
+// to a best score a max kept. A number of the same kind takes the op, and a
+// number with no recorded kind takes none.
+func TestApplyNumberKinds(t *testing.T) {
+	// opFor is an op each kind takes.
+	opFor := map[persistpb.Field_Kind]*persistpb.Op{
+		persistpb.Field_KIND_COUNT:  add("f", 1),
+		persistpb.Field_KIND_NUMBER: add("f", 1),
+		persistpb.Field_KIND_MAX:    {Field: "f", Op: &persistpb.Op_Max{Max: 100}},
+	}
+	kinds := []persistpb.Field_Kind{persistpb.Field_KIND_COUNT, persistpb.Field_KIND_NUMBER, persistpb.Field_KIND_MAX}
+	stored := func(wrote persistpb.Field_Kind) *persistpb.StoredRecord {
+		return &persistpb.StoredRecord{
+			Record: &persistpb.Record{Fields: map[string]*persistpb.Value{"f": {Value: &persistpb.Value_Number{Number: 40}}}},
+			Kinds:  map[string]persistpb.Field_Kind{"f": wrote},
+		}
+	}
+	typeOf := func(kind persistpb.Field_Kind) *persistpb.RecordType {
+		return &persistpb.RecordType{Name: "t", Writers: persistpb.Writers_WRITERS_SERVERS, Fields: map[string]*persistpb.Field{"f": {Kind: kind}}}
+	}
+	for _, wrote := range kinds {
+		for _, now := range kinds {
+			was := stored(wrote)
+			next, _, err := Apply(typeOf(now), was, []*persistpb.Op{opFor[now]}, "k")
+			if wrote == now {
+				if err != nil || next.GetKinds()["f"] != now {
+					t.Fatalf("%s on its own kind: %v %v", kindName(now), next, err)
+				}
+				continue
+			}
+			if err == nil || !strings.Contains(err.Error(), "another kind") || next != nil {
+				t.Fatalf("%s on a number a %s stored: %v %v", kindName(now), kindName(wrote), next, err)
+			}
+			if was.GetRecord().GetFields()["f"].GetNumber() != 40 {
+				t.Fatalf("%s on a %s changed the stored value", kindName(now), kindName(wrote))
+			}
+		}
+	}
+
+	// A number with no recorded kind is held by no field.
+	_, _, err := Apply(typeOf(persistpb.Field_KIND_COUNT), stored(persistpb.Field_KIND_UNKNOWN), []*persistpb.Op{add("f", 1)}, "k")
+	refused(t, err, "another kind")
+
+	// A first write records the field's kind.
+	next, _, err := Apply(stats, nil, []*persistpb.Op{add("roundsWon", 1), {Field: "bestHide", Op: &persistpb.Op_Max{Max: 3}}}, "k")
+	if err != nil || next.GetKinds()["roundsWon"] != persistpb.Field_KIND_COUNT || next.GetKinds()["bestHide"] != persistpb.Field_KIND_MAX {
+		t.Fatal("a first write's kinds", next.GetKinds(), err)
+	}
+}
+
+func TestApplyLimits(t *testing.T) {
+	// Too many ops, a long key, too many tags and too large a record.
+	ops := make([]*persistpb.Op, OpLimit+1)
+	for i := range ops {
+		ops[i] = add("roundsWon", 1)
+	}
+	_, _, err := Apply(stats, nil, ops, "")
+	refused(t, err, "1 to 32 changes")
+	_, _, err = Apply(stats, nil, ops[:0], "")
+	refused(t, err, "1 to 32 changes")
+	_, _, err = Apply(stats, nil, ops[:1], strings.Repeat("k", UpdateKeyBytes+1))
+	refused(t, err, "key is up to 64 bytes")
+
+	// Fill a field's tag limit before attempting one further insert.
+	var next *persistpb.StoredRecord
+	for i := range TagLimit {
+		if next, _, err = Apply(stats, next, []*persistpb.Op{insert("unlocks", strconv.Itoa(i))}, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _, err = Apply(stats, next, []*persistpb.Op{insert("unlocks", "one-more")}, "")
+	refused(t, err, "up to 256 tags")
+
+	// Long tags fill a record past RecordBytes before the tag bound: 256
+	// tags of 32 bytes take more than 8 KB, so the record's bound binds.
+	next, err = nil, nil
+	for i := 0; err == nil; i++ {
+		if i == TagLimit {
+			t.Fatal("256 long tags fit in one record")
+		}
+		tag := strings.Repeat("x", TagBytes-4) + strconv.Itoa(1000+i)
+		var applied *persistpb.StoredRecord
+		if applied, _, err = Apply(stats, next, []*persistpb.Op{insert("unlocks", tag)}, ""); err == nil {
+			next = applied
+		}
+	}
+	refused(t, err, "a persist record is up to 8192 bytes")
+	if next.GetRecord().SizeVT() > RecordBytes {
+		t.Fatal("a kept record passed the bound")
+	}
+}
+
+func TestStoreSurvivesRestart(t *testing.T) {
+	// A record written by one store reads back from a new one on the files.
+	dir := t.TempDir()
+	if _, _, err := newStore(dir).Update(76561197960265728, stats, []*persistpb.Op{add("roundsWon", 3)}, "round-1"); err != nil {
+		t.Fatal(err)
+	}
+	restarted := newStore(dir)
+	record, err := restarted.Get(76561197960265728, stats)
+	if err != nil || record.GetFields()["roundsWon"].GetNumber() != 3 {
+		t.Fatalf("after restart: %v %v", record, err)
+	}
+
+	// The recent keys survive too, so a resend after the restart counts once.
+	_, repeated, err := restarted.Update(76561197960265728, stats, []*persistpb.Op{add("roundsWon", 3)}, "round-1")
+	if err != nil || !repeated {
+		t.Fatalf("resent after restart: %v %v", repeated, err)
+	}
+
+	// Another player's record is their own, and no temp file is left.
+	record, err = restarted.Get(76561197960265729, stats)
+	if err != nil || len(record.GetFields()) != 0 {
+		t.Fatalf("other player: %v %v", record, err)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 || entries[0].Name() != "76561197960265728.json" {
+		t.Fatalf("files: %v", entries)
+	}
+}
+
+func TestStoreRefusesLargeFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "1.json"), make([]byte, FileBytes+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newStore(dir).Get(1, stats); err == nil || !strings.Contains(err.Error(), "past the") {
+		t.Fatalf("want the bound, got %v", err)
+	}
+}
+
+// TestTwoWritersBothLand is the conflict of two servers that update one
+// player's record at once: every add lands, and a set's later write wins.
+func TestTwoWritersBothLand(t *testing.T) {
+	// Submit distinct round identities from two writers into one player file.
+	store := newStore(t.TempDir())
+	const each = 50
+	var wg sync.WaitGroup
+	for server := range 2 {
+		wg.Go(func() {
+			for i := range each {
+				key := "server-" + strconv.Itoa(server) + "-round-" + strconv.Itoa(i)
+				if _, _, err := store.Update(7, stats, []*persistpb.Op{add("roundsWon", 1), insert("unlocks", key)}, key); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+	}
+
+	// Read only after every concurrent round has finished its durable update.
+	wg.Wait()
+	record, err := store.Get(7, stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := record.GetFields()["roundsWon"].GetNumber(); got != 2*each {
+		t.Fatalf("roundsWon %v, want %d", got, 2*each)
+	}
+	if got := len(record.GetFields()["unlocks"].GetTags().GetMembers()); got != 2*each {
+		t.Fatalf("unlocks %d, want %d", got, 2*each)
+	}
+}
+
+func TestAnswer(t *testing.T) {
+	// Resolve players through the same slot callback the local host uses.
+	store := newStore(t.TempDir())
+	m := manifest()
+	players := func(slot int32) (uint64, uint32, bool) { return 100 + uint64(slot), 10 + uint32(slot), slot < 4 }
+	call := func(method string, request interface{ MarshalVT() ([]byte, error) }) ([]byte, error) {
+		payload, _ := request.MarshalVT()
+		return Answer(store, m, players, method, payload)
+	}
+
+	// An update and a read reach the player in the slot.
+	data, err := call("Update", &persistpb.UpdateRequest{Player: 1, Generation: 11, Type: "stats", Ops: []*persistpb.Op{add("roundsWon", 1)}, UpdateKey: "r1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := &persistpb.UpdateReply{}
+	if err := updated.UnmarshalVT(data); err != nil || updated.GetRecord().GetFields()["roundsWon"].GetNumber() != 1 {
+		t.Fatalf("update: %v %v", updated, err)
+	}
+	data, err = call("GetMany", &persistpb.GetManyRequest{Players: []int32{1, 2}, Generations: []uint32{11, 12}, Type: "stats"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	many := &persistpb.GetManyReply{}
+	if err := many.UnmarshalVT(data); err != nil || len(many.GetRecords()) != 2 || many.GetRecords()[0].GetRecord().GetFields()["roundsWon"].GetNumber() != 1 || len(many.GetRecords()[1].GetRecord().GetFields()) != 0 {
+		t.Fatalf("getMany: %v %v", many, err)
+	}
+
+	// Each call outside the rules is refused.
+	_, err = call("Get", &persistpb.GetRequest{Player: 1, Generation: 11, Type: "settings"})
+	refused(t, err, "declares no persist record type")
+	_, err = call("Get", &persistpb.GetRequest{Player: 1, Generation: 11, Type: "stats", Key: "alt"})
+	refused(t, err, "take no key")
+	_, err = call("Get", &persistpb.GetRequest{Player: 9, Generation: 19, Type: "stats"})
+	refused(t, err, "no player is in slot 9")
+
+	// A request made for the slot's earlier connection, or naming none, is
+	// refused before it reaches a record, so a Player kept after its player
+	// left cannot read or change the next player's.
+	_, err = call("Update", &persistpb.UpdateRequest{Player: 1, Generation: 10, Type: "stats", Ops: []*persistpb.Op{add("roundsWon", 1)}, UpdateKey: "r2"})
+	refused(t, err, "left slot 1")
+	_, err = call("Get", &persistpb.GetRequest{Player: 1, Type: "stats"})
+	refused(t, err, "connection generation")
+	_, err = call("GetMany", &persistpb.GetManyRequest{Players: []int32{1, 2}, Generations: []uint32{11, 2}, Type: "stats"})
+	refused(t, err, "left slot 2")
+	_, err = call("GetMany", &persistpb.GetManyRequest{Players: []int32{1, 2}, Generations: []uint32{11}, Type: "stats"})
+	refused(t, err, "one connection generation for each player")
+	if record, err := store.Get(101, stats); err != nil || record.GetFields()["roundsWon"].GetNumber() != 1 {
+		t.Fatalf("after refused updates: %v %v", record, err)
+	}
+	_, err = call("GetMany", &persistpb.GetManyRequest{Players: make([]int32, ManyLimit+1), Type: "stats"})
+	refused(t, err, "up to 16 players")
+
+	// Malformed payloads and methods outside the contract are refused too.
+	_, err = Answer(store, m, players, "Get", []byte{0xff})
+	refused(t, err, "malformed")
+	_, err = Answer(store, m, players, "Delete", nil)
+	refused(t, err, "no method Delete")
+}
+
+// TestAnswerNeedsHeldGeneration refuses every call when the host reports no
+// generation for the slot's connection, so a request made for a player who
+// left cannot reach the next player in the slot on a host that does not
+// learn generations.
+func TestAnswerNeedsHeldGeneration(t *testing.T) {
+	// The host knows who is in each slot but not their connection.
+	store := newStore(t.TempDir())
+	m := manifest()
+	players := func(slot int32) (uint64, uint32, bool) { return 100 + uint64(slot), 0, true }
+	call := func(method string, request interface{ MarshalVT() ([]byte, error) }) error {
+		payload, _ := request.MarshalVT()
+		_, err := Answer(store, m, players, method, payload)
+		return err
+	}
+
+	// No path reaches a record.
+	refused(t, call("Update", &persistpb.UpdateRequest{Player: 1, Generation: 1, Type: "stats", Ops: []*persistpb.Op{add("roundsWon", 1)}, UpdateKey: "r1"}), "left slot 1")
+	refused(t, call("Get", &persistpb.GetRequest{Player: 1, Generation: 1, Type: "stats"}), "left slot 1")
+	refused(t, call("GetMany", &persistpb.GetManyRequest{Players: []int32{1}, Generations: []uint32{1}, Type: "stats"}), "left slot 1")
+	if record, err := store.Get(101, stats); err != nil || len(record.GetFields()) != 0 {
+		t.Fatalf("after refused calls: %v %v", record, err)
+	}
+}
+
+// TestStoreJSONEscaping keeps records at their declared bounds readable even
+// when control characters make the JSON file much larger than binary records.
+func TestStoreJSONEscaping(t *testing.T) {
+	// Every permitted type holds a large record and every permitted retry key.
+	dir := t.TempDir()
+	store := newStore(dir)
+	value := strings.Repeat("\x00", StringLimit)
+
+	// Build one binary record that fits while its JSON text expands sixfold.
+	fields := make(map[string]*persistpb.Field, 28)
+	ops := make([]*persistpb.Op, 0, 28)
+	for i := range 28 {
+		name := "f" + strconv.Itoa(i)
+		fields[name] = &persistpb.Field{Kind: persistpb.Field_KIND_STRING, MaxBytes: StringLimit}
+		ops = append(ops, setText(name, value))
+	}
+
+	// JSON escapes each NUL as six bytes; the last 64 keys need that room too.
+	for i := range TypeLimit {
+		recordType := &persistpb.RecordType{Name: "record" + strconv.Itoa(i), Fields: fields}
+		for key := range RecentKeys {
+			updateKey := strings.Repeat("\x00", UpdateKeyBytes-2) + strconv.Itoa(key)
+			if _, _, err := store.Update(7, recordType, ops, updateKey); err != nil {
+				t.Fatalf("type %d key %d: %v", i, key, err)
+			}
+		}
+	}
+
+	// A successful writer never leaves a file beyond its reader's bound.
+	info, err := os.Stat(filepath.Join(dir, "7.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() <= FileBytes/6 || info.Size() > FileBytes {
+		t.Fatalf("escaped file size %d, want more than %d and at most %d", info.Size(), FileBytes/6, FileBytes)
+	}
+
+	// Reopening the stored files retains every type's fields and retry keys.
+	restarted := newStore(dir)
+	for i := range TypeLimit {
+		recordType := &persistpb.RecordType{Name: "record" + strconv.Itoa(i), Fields: fields}
+		record, err := restarted.Get(7, recordType)
+		if err != nil || len(record.GetFields()) != len(fields) || record.GetFields()["f0"].GetText() != value {
+			t.Fatalf("reopened type %d: %v, error %v", i, record, err)
+		}
+		key := strings.Repeat("\x00", UpdateKeyBytes-2) + strconv.Itoa(RecentKeys-1)
+		if _, repeated, err := restarted.Update(7, recordType, ops, key); err != nil || !repeated {
+			t.Fatalf("reopened type %d retry: repeated %v, error %v", i, repeated, err)
+		}
+	}
+	t.Logf("escaped player file: %d bytes, reader bound: %d bytes", info.Size(), FileBytes)
+}
+
+// TestOpenRefusesLinkedDir refuses a store directory that is a link, as a
+// mod's checkout can carry .modlock/persist, before anything is made through
+// it.
+func TestOpenRefusesLinkedDir(t *testing.T) {
+	outside := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "persist")
+	if err := os.Symlink(outside, dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err == nil || !strings.Contains(err.Error(), dir) {
+		t.Fatalf("a linked store directory was opened: %v", err)
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Fatalf("files were made through the link: %v", entries)
+	}
+}
+
+// TestOpenLeavesHolderLinkTarget refuses a store whose holder file is a link,
+// to a file outside the directory or to a record in it, and leaves the file
+// it leads to as it was.
+func TestOpenLeavesHolderLinkTarget(t *testing.T) {
+	for _, inside := range []bool{false, true} {
+		dir := t.TempDir()
+		target := filepath.Join(t.TempDir(), "kept")
+		if inside {
+			target = filepath.Join(dir, "76561197960265728.json")
+		}
+		if err := os.WriteFile(target, []byte("kept"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(dir, HolderFile)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(dir); err == nil {
+			t.Fatalf("inside=%v: a store with a linked holder file was opened", inside)
+		}
+		if data, err := os.ReadFile(target); err != nil || string(data) != "kept" {
+			t.Fatalf("inside=%v: the holder link's target is now %q: %v", inside, data, err)
+		}
+	}
+}
+
+// TestStoreRefusesLinkedRecord neither reads nor updates a player's file that
+// is a link, and leaves the file it leads to as it was.
+func TestStoreRefusesLinkedRecord(t *testing.T) {
+	// A player's file leads to a valid file outside the store.
+	dir := t.TempDir()
+	store := newStore(t.TempDir())
+	if _, _, err := store.Update(1, stats, []*persistpb.Op{add("roundsWon", 5)}, "round-1"); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(store.Dir(), "1.json")
+	want, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "1.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both a read and an update are refused, naming the file.
+	linked := newStore(dir)
+	if record, err := linked.Get(1, stats); err == nil || !strings.Contains(err.Error(), filepath.Join(dir, "1.json")) {
+		t.Fatalf("read through a link: %v %v", record, err)
+	}
+	if _, _, err := linked.Update(1, stats, []*persistpb.Op{add("roundsWon", 1)}, "round-2"); err == nil {
+		t.Fatal("an update through a link was kept")
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != string(want) {
+		t.Fatalf("the record link's target is now %q: %v", data, err)
+	}
+	if info, err := os.Lstat(filepath.Join(dir, "1.json")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link was replaced: %v", err)
+	}
+}

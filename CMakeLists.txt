@@ -205,6 +205,7 @@ add_library(modlock_sdk SHARED
   ${CMAKE_CURRENT_BINARY_DIR}/src/wasm/hero_builds_data.cc
   src/wasm/game_match.cc
   src/wasm/call_profile.cc
+  src/wasm/service_calls.cc
   src/wasm/console_lines.cc
   src/wasm/entity_rules.cc
   src/wasm/game_services.cc
@@ -297,6 +298,7 @@ endif()
 
 add_executable(modlock-host
   src/host_app/control_link.cc
+  src/host_app/fixtures.cc
   src/host_app/game_dump.cc
   src/host_app/game_dump_console.cc
   src/host_app/game_dump_entities.cc
@@ -568,6 +570,9 @@ if(BUILD_TESTING)
   target_include_directories(entity_rules_test PRIVATE src)
   target_link_libraries(entity_rules_test PRIVATE modlock::sdk gtest_main)
   add_test(NAME entity_rules_test COMMAND entity_rules_test)
+  add_executable(precache_list_test tests/precache_list_test.cc)
+  target_link_libraries(precache_list_test PRIVATE modlock::sdk gtest_main)
+  add_test(NAME precache_list_test COMMAND precache_list_test)
   add_executable(console_variables_test tests/console_variables_test.cc)
   target_link_libraries(console_variables_test PRIVATE modlock::sdk gtest_main)
   add_test(NAME console_variables_test COMMAND console_variables_test)
@@ -704,6 +709,19 @@ if(BUILD_TESTING)
   target_compile_definitions(wasm_host_test PRIVATE EXTENSION_GO_WASM="${extension_go_wasm}")
   target_link_libraries(wasm_host_test PRIVATE modlock::sdk gtest_main)
   add_test(NAME wasm_host_test COMMAND wasm_host_test)
+  # host_fixtures_test runs the same mod against needed services and the
+  # host's fixtures, and its forwarded calls over the control link.
+  add_executable(host_fixtures_test tests/host_fixtures_test.cc src/host_app/fixtures.cc
+    src/host_app/control_link.cc
+    src/host_app/control/control.pb.cc)
+  add_dependencies(host_fixtures_test extension_go_wasm)
+  target_include_directories(host_fixtures_test PRIVATE src)
+  target_compile_definitions(host_fixtures_test PRIVATE EXTENSION_GO_WASM="${extension_go_wasm}")
+  target_link_libraries(host_fixtures_test PRIVATE modlock::sdk gtest_main)
+  if(WIN32)
+    target_link_libraries(host_fixtures_test PRIVATE ws2_32)
+  endif()
+  add_test(NAME host_fixtures_test COMMAND host_fixtures_test)
   add_executable(wasm_ui_test tests/wasm_ui_test.cc src/wasm/ui.cc)
   target_include_directories(wasm_ui_test PRIVATE src)
   target_link_libraries(wasm_ui_test PRIVATE modlock::sdk gtest_main)

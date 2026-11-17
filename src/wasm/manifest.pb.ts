@@ -5,6 +5,7 @@
 import { Setting } from './settings/settings.pb.js'
 import { Metric } from './metrics/metrics.pb.js'
 import { Board } from './scores/scores.pb.js'
+import { RecordType } from './persist/persist.pb.js'
 import type { MessageType } from '@aptre/protobuf-es-lite/message'
 import { createMessageType, newMap } from '@aptre/protobuf-es-lite/message'
 import type {
@@ -91,6 +92,18 @@ export interface Manifest {
    * scores service.
    */
   boards?: Board[]
+  /**
+   * Services are the services the mod calls with CallService, by name only;
+   * the host learns no methods. A host refuses to start a mod when a service
+   * it needs has no provider, and starts it without an optional one, whose
+   * calls then fail.
+   */
+  services?: Service[]
+  /**
+   * Persist are the record types the mod keeps for each player through the
+   * host's persist service, such as stats or unlocks, up to 8.
+   */
+  persist?: RecordType[]
 }
 
 export const Manifest: MessageType<Manifest> =
@@ -111,6 +124,8 @@ export const Manifest: MessageType<Manifest> =
       [12, 'free_for_all', 8],
       [13, 'content_addon', 9],
       [14, 'boards', 11, 1, Board.codec],
+      [15, 'services', 11, 1, Service.codec],
+      [16, 'persist', 11, 1, RecordType.codec],
     ],
     {
       decode: (r: BinaryReader, end: number, m: Manifest): Manifest => {
@@ -161,6 +176,12 @@ export const Manifest: MessageType<Manifest> =
               break
             case 14:
               ;(m.boards ??= []).push(Board.decode(r, r.delimited(), {}))
+              break
+            case 15:
+              ;(m.services ??= []).push(Service.decode(r, r.delimited(), {}))
+              break
+            case 16:
+              ;(m.persist ??= []).push(RecordType.decode(r, r.delimited(), {}))
               break
             default:
               r.skip(t)
@@ -224,6 +245,14 @@ export const Manifest: MessageType<Manifest> =
         {
           const a = m.boards
           if (a != null) for (const e of a) Board.writeField(w, 14, e)
+        }
+        {
+          const a = m.services
+          if (a != null) for (const e of a) Service.writeField(w, 15, e)
+        }
+        {
+          const a = m.persist
+          if (a != null) for (const e of a) RecordType.writeField(w, 16, e)
         }
       },
     },
@@ -320,6 +349,61 @@ export const Manifest_Language_Enum = /* @__PURE__ */ createEnumType(
     [5, 'LANGUAGE_PYTHON'],
   ],
 )
+
+/**
+ * Service names one service a mod calls.
+ *
+ * @generated from message modlock.wasm.Service
+ */
+export interface Service {
+  /**
+   * Name is the service's name as CallService names it, such as
+   * "example.drills.v1".
+   */
+  name?: string
+  /**
+   * Optional marks a service the mod runs without. Unset, the mod needs it.
+   */
+  optional?: boolean
+}
+
+export const Service: MessageType<Service> =
+  /* @__PURE__ */ createMessageType<Service>(
+    'modlock.wasm.Service',
+    () => [
+      [1, 'name', 9],
+      [2, 'optional', 8],
+    ],
+    {
+      decode: (r: BinaryReader, end: number, m: Service): Service => {
+        while (r.pos < end) {
+          const t = r.tag()
+          if ((t & 7) === 4) return m
+          switch (t >>> 3) {
+            case 1:
+              m.name = r.string()
+              break
+            case 2:
+              m.optional = r.bool()
+              break
+            default:
+              r.skip(t)
+          }
+        }
+        return m
+      },
+      encode: (m: Service, w: Writer): void => {
+        {
+          const v = m.name
+          if (v) w.uint32(10).string(v)
+        }
+        {
+          const v = m.optional
+          if (v) w.uint32(16).bool(v)
+        }
+      },
+    },
+  )
 
 /**
  * Movement selects the movement model heroes walk and jump with.

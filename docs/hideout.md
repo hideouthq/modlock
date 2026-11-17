@@ -5,7 +5,7 @@ on top of upstream Modlock. Bebop Wars is a consumer, not a dependency of this
 fork. Mode rules, currencies, UI adapters and research commands belong in the
 mode project.
 
-This branch includes upstream through `ea5897c`. Upstream's `e9f1c39` now
+This branch includes upstream through `5b38471`. Upstream's `e9f1c39` now
 changes modifier definitions (`FILE_MODIFIERS`), so the fork's own modifier
 writer from `b725809` is gone; that commit's definition readback, scripted
 press bypass and `cancelPress` remain, as does `5e63fed`. The `29ae444-bebop.2` release tag remains

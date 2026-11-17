@@ -30,4 +30,14 @@ type Config struct {
 	// so a later session loads the interpreters and an unchanged mod without
 	// compiling them, or empty to compile each module once per session.
 	Compiled string
+	// Fixtures returns the directory of service fixtures for the built mod at
+	// path, or empty when it has none; see FixtureDir. Nil gives no mod
+	// fixtures.
+	Fixtures func(path string) string
+	// Persist returns the directory that keeps the records of the built mod
+	// at path, the mod slug, through the persist service, or empty to keep
+	// them for the session only. Nil keeps every mod's for the session only.
+	// An error, such as for a slug that cannot name a directory, refuses to
+	// start the mod.
+	Persist func(path, slug string) (string, error)
 }

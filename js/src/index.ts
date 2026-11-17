@@ -46,11 +46,13 @@ import { Cast, type Want } from './cast.js'
 import { connection, keepPlayers } from './players.js'
 import { advancePuppets } from './puppet.js'
 import { settleRestore } from './restore.js'
+import { endServiceCall } from './service-later.js'
 import { advance, after } from './timer.js'
 import { change, press, tick } from './ui.js'
 export * as vector from './vector.js'
 
 export { Buttons, Layers } from './bits.js'
+export { callServiceLater, type ServiceDone } from './service-later.js'
 export { after, every, sequence, type Timer } from './timer.js'
 export {
   type CameraMove,
@@ -135,6 +137,11 @@ export {
 } from './rotation.js'
 export { bystanderStates, holdBystander } from './bystander.js'
 export { Strays, strayGraceSeconds } from './strays.js'
+export {
+  Stragglers,
+  stragglerConnectSeconds,
+  type StragglersOptions,
+} from './stragglers.js'
 export { type Check, ProbeRun } from './probe.js'
 export {
   poseAt,
@@ -150,6 +157,16 @@ export {
 export { type HeroSnapshot, restoreHero } from './restore.js'
 export { type ReplayedHit, replayDamage } from './replayed-damage.js'
 export { type CatalogEntry, Dropper, dropperButtons } from './dropper.js'
+export {
+  persist,
+  type PersistChange,
+  type PersistChanges,
+  type PersistDone,
+  type PersistOptions,
+  type PersistRead,
+  type PersistRecord,
+  type PersistValue,
+} from './persist.js'
 export {
   type BoardPage,
   type BoardRead,
@@ -756,7 +773,7 @@ const handlers: ModHandlers = {
   uiPress(event) {
     // A press arrives under the same CPU budget as a command, so its handler
     // also runs with the next frame.
-    after(0, () => press(event.player, event.node))
+    after(0, () => press(event.player, event.node, event.action, event.payload))
   },
 
   uiInput(event) {
@@ -770,6 +787,10 @@ const handlers: ModHandlers = {
       throw new Error(`the mod serves no service ${event.service}`)
     }
     return { payload: registered.handler(event.method, event.payload) }
+  },
+
+  serviceReplied(event) {
+    endServiceCall(event)
   },
 
   // scriptc types an unannotated method that returns literals of different

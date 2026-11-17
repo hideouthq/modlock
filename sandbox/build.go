@@ -3,6 +3,7 @@ package sandbox
 import (
 	"io/fs"
 
+	"github.com/paralin/modlock/persist"
 	"github.com/paralin/modlock/src/wasm"
 	"github.com/pkg/errors"
 )
@@ -22,6 +23,12 @@ type Build struct {
 	Entry []byte
 	// Data holds the files the mod ships in its data/ directory.
 	Data fs.FS
+	// fixtures answer the services the manifest names that have a fixture,
+	// by service name.
+	fixtures map[string]*fixture
+	// records keeps the records of the persist service, when the manifest
+	// declares record types.
+	records *persist.Store
 }
 
 // ReadBuild reads the built mod in dist through its manifest.

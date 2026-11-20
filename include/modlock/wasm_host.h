@@ -44,9 +44,11 @@ class MODLOCK_API WasmHostObserver {
  public:
   virtual ~WasmHostObserver() = default;
 
-  // Started reports a mod that started; reloaded is true when it started
-  // again, for a new build or after it stopped.
-  virtual void Started(std::string_view mod, bool reloaded) = 0;
+  // Started reports a mod that started from the build read at path, the
+  // directory or .wasm file given to Load or Reload; reloaded is true when it
+  // started again, for a new build or after it stopped. A held mod starts the
+  // newest build a reload brought, which path names.
+  virtual void Started(std::string_view mod, const std::filesystem::path& path, bool reloaded) = 0;
 
   // Logged carries one line the mod logged.
   virtual void Logged(std::string_view mod, std::string_view text) = 0;
@@ -157,6 +159,11 @@ class MODLOCK_API WasmHost {
   // Held reports whether the running mod named mod holds its build through
   // reloads.
   [[nodiscard]] bool Held(std::string_view mod) const;
+
+  // BoardVersion returns the active build's declared version of board. A
+  // queued reload leaves the active declaration in place until it starts.
+  [[nodiscard]] std::optional<uint32_t> BoardVersion(std::string_view mod,
+                                                     std::string_view board) const;
 
   // Scope limits the running mod named mod to scope, as when one mod runs a
   // game for some of the server's players beside another. A limited mod sees

@@ -19,11 +19,10 @@ package panorama
 
 import "embed"
 
-// Sources holds the drawing's, the hud's, the guard's, its ability bar's and
-// display's, the layout library's and its native changes' TypeScript source
-// and the drawing's browser stand-in.
+// Sources holds the renderer and browser preview source, and the renderer's
+// stream messages, so both can be built from a vendored copy.
 //
-//go:embed src/draw.ts src/data.ts src/hud.ts src/guard.ts src/ability-hud.ts src/abilities.ts src/layout.ts src/native.ts browser/dom.ts browser/layouts.ts browser/sheets.ts browser/panels.css
+//go:embed src browser stream.pb.ts
 var Sources embed.FS
 
 // Layout is the renderer's layout, which a client content package installs

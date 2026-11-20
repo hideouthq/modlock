@@ -163,6 +163,15 @@ bool WasmPlugin::Start() {
   return true;
 }
 
+std::optional<uint32_t> WasmPlugin::BoardVersion(std::string_view name) const {
+  for (const auto& board : manifest_.boards()) {
+    if (board.name() == name) {
+      return board.version();
+    }
+  }
+  return std::nullopt;
+}
+
 std::expected<void, std::string> WasmPlugin::Reload(Build build) {
   if (held_) {
     waiting_ = std::move(build);
@@ -302,7 +311,7 @@ std::expected<void, std::string> WasmPlugin::Begin(bool reloaded) {
     return std::unexpected(started.error());
   }
   wants_ = std::move(*started);
-  host_.Notify([&](WasmHostObserver& observer) { observer.Started(name_, reloaded); });
+  host_.Notify([&](WasmHostObserver& observer) { observer.Started(name_, path_, reloaded); });
   if (map_) {
     ListenToPlayers();
     ListenToCombat();

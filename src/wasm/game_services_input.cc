@@ -19,6 +19,9 @@ constexpr uint64_t kInBack = 1u << 4;        // IN_BACK
 constexpr uint64_t kInMoveLeft = 1u << 9;    // IN_MOVELEFT
 constexpr uint64_t kInMoveRight = 1u << 10;  // IN_MOVERIGHT
 constexpr uint64_t kMoveKeys = kInForward | kInBack | kInMoveLeft | kInMoveRight;
+// IN_SPEC_NEXT, IN_SPEC_PREV, IN_SPEC_MODE and IN_SPEC_TOGGLE_TEAM: the buttons a
+// spectating player's client sends in place of the others.
+constexpr uint64_t kSpectatorButtons = 0xfull << 49;
 
 // MoveKeys returns the movement buttons that match the forward and left axes.
 uint64_t MoveKeys(float forward, float left) {
@@ -65,6 +68,12 @@ void GameServices::Input() {
     return;
   }
   input_ = std::move(*input);
+
+  // The input hook runs only for heroes, so a spectating or dead player's
+  // changes come from their commands.
+  if (auto commands = Commands(); !commands) {
+    std::cerr << "mod input: " << commands.error() << '\n';
+  }
 }
 
 uint64_t GameServices::Filter(gameinterop::AbilityInputHook::Input& input) {
@@ -85,11 +94,11 @@ uint64_t GameServices::Filter(gameinterop::AbilityInputHook::Input& input) {
   const uint64_t pressed = held & changed;
   const uint64_t released = ~held & changed;
 
-  // Queue each game's watched changes and add its pending press, then apply
-  // the remaps to the input the presses made.
+  // Queue the changes and add each game's pending press, then apply the
+  // remaps to the input the presses made.
+  Record(input.slot, pressed, released);
   uint64_t injected = 0;
   for (auto* game : games_) {
-    game->input_.Record(input.slot, pressed, released);
     injected |= game->input_.ApplyPress(input);
   }
   for (auto* game : games_) {
@@ -97,6 +106,53 @@ uint64_t GameServices::Filter(gameinterop::AbilityInputHook::Input& input) {
     injected = game->input_.RemapButtons(injected);
   }
   return blocked & ~injected;
+}
+
+uint64_t GameServices::Observed(int32_t slot, uint64_t pressed, uint64_t released) {
+  // Commands arrive before the input hook installs; nothing watches them yet.
+  if (!input_) {
+    return 0;
+  }
+  if (pressed || released) {
+    Record(slot, pressed, released);
+  }
+
+  // The input hook withholds a hero's buttons, but a spectating player has no
+  // hero for it to run on, so their commands withhold the spectator buttons.
+  uint64_t blocked = 0;
+  for (auto* game : games_) {
+    blocked |= game->input_.Blocked(slot);
+  }
+  return blocked & kSpectatorButtons;
+}
+
+void GameServices::Record(int32_t slot, uint64_t pressed, uint64_t released) {
+  // Drop what the other path recorded lately; without a tick, record all.
+  auto& recorded = recorded_[static_cast<size_t>(slot)];
+  if (const auto now = Tick()) {
+    if (*now - recorded.tick > 2) {
+      recorded = {.tick = *now};
+    }
+    pressed &= ~recorded.pressed;
+    released &= ~recorded.released;
+    recorded.pressed |= pressed;
+    recorded.released |= released;
+  }
+  if (!pressed && !released) {
+    return;
+  }
+  for (auto* game : games_) {
+    game->input_.Record(slot, pressed, released);
+  }
+}
+
+std::optional<int32_t> GameServices::Tick() {
+  auto server = Server();
+  if (!server) {
+    return std::nullopt;
+  }
+  auto clock = (*server)->ReadClock();
+  return clock ? std::optional(clock->tick) : std::nullopt;
 }
 
 void GameServices::Projectiles() {
@@ -150,7 +206,10 @@ std::expected<void, std::string> GameServices::Commands() {
   // Pawn reads ask every frame, so a hook that cannot install is not retried.
   auto image = Image();
   auto hook = image ? gameinterop::CommandHook::Install(
-                          **image, [this](int32_t slot) { return Driven(slot); })
+                          **image, [this](int32_t slot) { return Driven(slot); },
+                          [this](int32_t slot, uint64_t pressed, uint64_t released) {
+                            return Observed(slot, pressed, released);
+                          })
                     : std::unexpected(image.error());
   if (!hook) {
     usercmds_error_ = hook.error();

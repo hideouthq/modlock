@@ -853,6 +853,19 @@ func ReadFile(path string) (*string, error) {
 	return response.Text, nil
 }
 
+// ReadFileBytes reads one of the mod's files from the same places as
+// ReadFile, as bytes that need not be text, such as a packed table the mod
+// views in place. A file in neither reads as unset. The host reads the
+// whole file during the call.
+func ReadFileBytes(path string) ([]byte, error) {
+	request := &wasmpb.ReadFileRequest{Path: path}
+	response := &wasmpb.ReadFileBytesResponse{}
+	if err := invoke("ReadFileBytes", request, response); err != nil {
+		return nil, err
+	}
+	return response.Data, nil
+}
+
 // WriteFile replaces one of the mod's files in the host's copy, which
 // outlives a restart and an update of the mod; the files the mod ships stay
 // as they are. The write is whole or not at all, and the host refuses one
@@ -1540,13 +1553,15 @@ func (p Player) RemoveBot() error {
 }
 
 // BlockInput withholds buttons from every player's hero until called
-// again. Stopping the mod releases them.
+// again, and the spectator buttons from a spectating player's commands.
+// Stopping the mod releases them.
 func BlockInput(buttons uint64) error {
 	return invoke("BlockInput", &wasmpb.InputRequest{Buttons: buttons}, nil)
 }
 
 // BlockInput withholds buttons from the player's hero until called
-// again, on top of the block on everyone. Zero releases the player.
+// again, and the spectator buttons from their commands while they
+// spectate, on top of the block on everyone. Zero releases the player.
 func (p Player) BlockInput(buttons uint64) error {
 	return invoke("BlockPlayerInput", &wasmpb.PlayerInputRequest{Player: p.Slot(), Buttons: buttons}, nil)
 }

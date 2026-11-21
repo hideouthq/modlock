@@ -654,6 +654,17 @@ _CameraParam: dict[Any, Any] = {
 }
 
 
+# _ClockFormat maps each ClockFormat to its number and back.
+_ClockFormat: dict[Any, Any] = {
+    0: "minutes",
+    "minutes": 0,
+    1: "seconds",
+    "seconds": 1,
+    2: "tenths",
+    "tenths": 2,
+}
+
+
 # _Scaling maps each Scaling to its number and back.
 _Scaling: dict[Any, Any] = {
     0: "default",
@@ -716,6 +727,12 @@ _HudPart: dict[Any, Any] = {
     "broker_countdown": 11,
     12: "all",
     "all": 12,
+    13: "minimap_players",
+    "minimap_players": 13,
+    14: "inventory",
+    "inventory": 14,
+    15: "crosshair",
+    "crosshair": 15,
 }
 
 
@@ -2791,7 +2808,8 @@ class Player:
 
     def block_input(self, buttons: int) -> bool:
         """block_input withholds buttons from the player's hero until called
-        again, on top of the block on everyone. Zero releases the player.
+        again, and the spectator buttons from their commands while they
+        spectate, on top of the block on everyone. Zero releases the player.
         """
         return _call("BlockPlayerInput", "PlayerInputRequest", {"player": self, "buttons": buttons}) is not None
 
@@ -3713,6 +3731,12 @@ _SCHEMA: wire.Schema = {
         None,
         [
             wire.Field(1, "text", "string", optional=True),
+        ],
+    ),
+    "ReadFileBytesResponse": (
+        None,
+        [
+            wire.Field(1, "data", "bytes", optional=True),
         ],
     ),
     "WriteFileRequest": (
@@ -4666,6 +4690,8 @@ _SCHEMA: wire.Schema = {
             wire.Field(36, "cues", "message", repeated=True, message="Cue"),
             wire.Field(37, "ability_bar_presses", "bool"),
             wire.Field(38, "ability_display", "message", repeated=True, message="AbilityRow"),
+            wire.Field(39, "clock", "message", message="Clock"),
+            wire.Field(40, "hide_in_chat", "bool"),
         ],
     ),
     "Node_VariablesEntry": (
@@ -4673,6 +4699,16 @@ _SCHEMA: wire.Schema = {
         [
             wire.Field(1, "key", "string"),
             wire.Field(2, "value", "string"),
+        ],
+    ),
+    "Clock": (
+        None,
+        [
+            wire.Field(1, "seconds", "double"),
+            wire.Field(2, "up", "bool"),
+            wire.Field(3, "paused", "bool"),
+            wire.Field(4, "format", "enum", enum=_ClockFormat),
+            wire.Field(5, "run", "uint32"),
         ],
     ),
     "AbilityRow": (
@@ -4699,6 +4735,7 @@ _SCHEMA: wire.Schema = {
             wire.Field(1, "number", "uint32"),
             wire.Field(2, "sound", "string"),
             wire.Field(3, "seconds", "float"),
+            wire.Field(4, "delay", "float"),
         ],
     ),
     "TextEntry": (
@@ -4795,6 +4832,33 @@ _SCHEMA: wire.Schema = {
             wire.Field(43, "decoration", "enum", enum=_Decoration),
             wire.Field(44, "transform", "message", message="Transform"),
             wire.Field(45, "transition", "message", message="Transition"),
+            wire.Field(46, "clip", "message", message="Clip"),
+            wire.Field(47, "turn", "float"),
+        ],
+    ),
+    "Clip": (
+        None,
+        [
+            wire.Field(1, "rect", "message", optional=True, message="ClipRect"),
+            wire.Field(2, "radial", "message", optional=True, message="ClipRadial"),
+        ],
+    ),
+    "ClipRect": (
+        None,
+        [
+            wire.Field(1, "top", "float"),
+            wire.Field(2, "right", "float"),
+            wire.Field(3, "bottom", "float"),
+            wire.Field(4, "left", "float"),
+        ],
+    ),
+    "ClipRadial": (
+        None,
+        [
+            wire.Field(1, "center_x", "float", optional=True),
+            wire.Field(2, "center_y", "float", optional=True),
+            wire.Field(3, "start", "float"),
+            wire.Field(4, "sweep", "float"),
         ],
     ),
     "Gradient": (
@@ -4840,6 +4904,16 @@ _SCHEMA: wire.Schema = {
             wire.Field(1, "seconds", "float"),
             wire.Field(2, "delay", "float"),
             wire.Field(3, "easing", "enum", enum=_Easing),
+            wire.Field(4, "curve", "message", message="Curve"),
+        ],
+    ),
+    "Curve": (
+        None,
+        [
+            wire.Field(1, "x1", "float"),
+            wire.Field(2, "y1", "float"),
+            wire.Field(3, "x2", "float"),
+            wire.Field(4, "y2", "float"),
         ],
     ),
     "Length": (
@@ -5079,6 +5153,18 @@ def read_file(path: str) -> str | None:
     if response is None:
         return None
     return response["text"]
+
+
+def read_file_bytes(path: str) -> bytes | None:
+    """read_file_bytes reads one of the mod's files from the same places as
+    ReadFile, as bytes that need not be text, such as a packed table the mod
+    views in place. A file in neither reads as unset. The host reads the
+    whole file during the call.
+    """
+    response = _call("ReadFileBytes", "ReadFileRequest", {"path": path}, "ReadFileBytesResponse")
+    if response is None:
+        return None
+    return response["data"]
 
 
 def write_file(path: str, text: str) -> bool:
@@ -5350,7 +5436,8 @@ def add_bot(options: BotOptions) -> Player | None:
 
 def block_input(buttons: int) -> bool:
     """block_input withholds buttons from every player's hero until called
-    again. Stopping the mod releases them.
+    again, and the spectator buttons from a spectating player's commands.
+    Stopping the mod releases them.
     """
     return _call("BlockInput", "InputRequest", {"buttons": buttons}) is not None
 
@@ -5765,6 +5852,14 @@ class Buttons(enum.IntFlag):
     ULTIMATE = 1 << 36
     # PARRY is the melee parry button.
     PARRY = 1 << 42
+    # SPEC_NEXT to SPEC_TOGGLE_TEAM are the buttons a player's client sends in
+    # place of the others while they spectate, with no hero of their own in
+    # play: SPEC_NEXT and SPEC_PREV cycle the watched player, SPEC_MODE changes
+    # the camera mode, and SPEC_TOGGLE_TEAM is the jump key, Space by default.
+    SPEC_NEXT = 1 << 49
+    SPEC_PREV = 1 << 50
+    SPEC_MODE = 1 << 51
+    SPEC_TOGGLE_TEAM = 1 << 52
 
 
 class Layers(enum.IntFlag):

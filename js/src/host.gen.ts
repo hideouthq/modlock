@@ -3475,7 +3475,8 @@ export class Player {
 
   /**
    * blockInput withholds buttons from the player's hero until called
-   * again, on top of the block on everyone. Zero releases the player.
+   * again, and the spectator buttons from their commands while they
+   * spectate, on top of the block on everyone. Zero releases the player.
    */
   blockInput(buttons: bigint): boolean {
     return call('BlockPlayerInput', inputPb.PlayerInputRequest.toBinary({ player: this.slot, buttons })) !== undefined
@@ -3732,6 +3733,19 @@ export function readFile(path: string): string | undefined {
   if (reply === undefined) return undefined
   const response = filesPb.ReadFileResponse.fromBinary(reply)
   return response.text
+}
+
+/**
+ * readFileBytes reads one of the mod's files from the same places as
+ * ReadFile, as bytes that need not be text, such as a packed table the mod
+ * views in place. A file in neither reads as unset. The host reads the
+ * whole file during the call.
+ */
+export function readFileBytes(path: string): Uint8Array | undefined {
+  const reply = call('ReadFileBytes', filesPb.ReadFileRequest.toBinary({ path }))
+  if (reply === undefined) return undefined
+  const response = filesPb.ReadFileBytesResponse.fromBinary(reply)
+  return response.data
 }
 
 /**
@@ -4025,7 +4039,8 @@ export function addBot(options: BotOptions): Player | undefined {
 
 /**
  * blockInput withholds buttons from every player's hero until called
- * again. Stopping the mod releases them.
+ * again, and the spectator buttons from a spectating player's commands.
+ * Stopping the mod releases them.
  */
 export function blockInput(buttons: bigint): boolean {
   return call('BlockInput', inputPb.InputRequest.toBinary({ buttons })) !== undefined

@@ -115,10 +115,11 @@ using WasmLateExtension = std::function<void(std::string_view mod, std::string_v
 // /restartmod. A trap, a runaway event past five seconds or an exhausted
 // memory budget stops that mod with a log line; the server keeps running. A
 // stopped mod clears what it placed and showed and stays stopped, with a
-// warning in chat each minute, until a player restarts it with /restartmod
-// or a reload replaces it. Mods share one Wasmtime engine, and identical module
-// bytes compile once while a mod uses them, so the mods of one interpreted
-// language share one compiled interpreter.
+// warning in chat each minute, until a player restarts it with /restartmod,
+// the host restarts it with Restart or a reload replaces it. Mods share one
+// Wasmtime engine, and identical module bytes compile once while a mod uses
+// them, so the mods of one interpreted language share one compiled
+// interpreter.
 //
 // The host must outlive every plugin it loads. Its methods run on the engine
 // thread, or before the engine starts.
@@ -156,9 +157,33 @@ class MODLOCK_API WasmHost {
   // replaces it on the first frame after the mod releases the hold.
   [[nodiscard]] std::expected<void, std::string> Reload(const std::filesystem::path& path);
 
+  // Prepare compiles the module of the build at path on a background thread,
+  // so that a later Load or Reload of it does not compile on the calling
+  // thread; compiling a large module takes seconds, which the engine thread
+  // cannot spare. It returns false while the module compiles and true once it
+  // is ready, and an error when the build cannot be read or compiled; the
+  // error is returned once, and the next call tries again. The host keeps the
+  // newest prepared module of each mod until it is destroyed. Builds compile
+  // one at a time, in the order they were first prepared.
+  [[nodiscard]] std::expected<bool, std::string> Prepare(const std::filesystem::path& path);
+
   // Held reports whether the running mod named mod holds its build through
-  // reloads.
+  // reloads and restarts.
   [[nodiscard]] bool Held(std::string_view mod) const;
+
+  // Restart starts the running mod named mod again on its next frame, in a
+  // new instance of its running build: every value its code kept is gone,
+  // and it hears the loaded world and the players as a fresh start does. Its
+  // handoff state, scope and players' settings carry over, as through a
+  // reload. A stopped mod starts again. A mod that holds its build restarts
+  // on the first frame after it releases the hold, unless force is true; a
+  // build that waits for the same hold starts in its place. A request while
+  // one is pending is the same request, and force stops it waiting.
+  [[nodiscard]] std::expected<void, std::string> Restart(std::string_view mod, bool force = false);
+
+  // Restarting reports whether a restart of the running mod named mod waits
+  // for its next frame or for its hold's release.
+  [[nodiscard]] bool Restarting(std::string_view mod) const;
 
   // BoardVersion returns the active build's declared version of board. A
   // queued reload leaves the active declaration in place until it starts.

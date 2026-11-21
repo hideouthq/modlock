@@ -2008,7 +2008,8 @@ export type Player = {
 	-- removeBot removes a bot the mod added.
 	removeBot: (self: Player) -> boolean,
 	-- blockInput withholds buttons from the player's hero until called
-	-- again, on top of the block on everyone. Zero releases the player.
+	-- again, and the spectator buttons from their commands while they
+	-- spectate, on top of the block on everyone. Zero releases the player.
 	blockInput: (self: Player, buttons: number) -> boolean,
 	-- press presses buttons at the player's next input, even through a block.
 	-- A bot presses them as a player would.
@@ -2438,7 +2439,8 @@ function Player.removeBot(self: Player): boolean
 end
 
 -- blockInput withholds buttons from the player's hero until called
--- again, on top of the block on everyone. Zero releases the player.
+-- again, and the spectator buttons from their commands while they
+-- spectate, on top of the block on everyone. Zero releases the player.
 function Player.blockInput(self: Player, buttons: number): boolean
 	return call("BlockPlayerInput", "PlayerInputRequest", { player = self, buttons = buttons }) ~= nil
 end
@@ -2853,6 +2855,12 @@ local HudPart: { [any]: any } = {
 	brokerCountdown = 11,
 	[12] = "all",
 	all = 12,
+	[13] = "minimapPlayers",
+	minimapPlayers = 13,
+	[14] = "inventory",
+	inventory = 14,
+	[15] = "crosshair",
+	crosshair = 15,
 }
 
 -- Scaling holds the wire names of the interface enum Scaling.
@@ -2887,6 +2895,16 @@ local HeroLook: { [any]: any } = {
 	topBar = 4,
 	[5] = "minimap",
 	minimap = 5,
+}
+
+-- ClockFormat holds the wire names of the interface enum ClockFormat.
+local ClockFormat: { [any]: any } = {
+	[0] = "minutes",
+	minutes = 0,
+	[1] = "seconds",
+	seconds = 1,
+	[2] = "tenths",
+	tenths = 2,
 }
 
 -- Window holds the wire names of the service enum Window.
@@ -3353,6 +3371,9 @@ schema.ReadFileRequest = {
 }
 schema.ReadFileResponse = {
 	{ number = 1, name = "text", kind = "string", optional = true },
+}
+schema.ReadFileBytesResponse = {
+	{ number = 1, name = "data", kind = "bytes", optional = true },
 }
 schema.WriteFileRequest = {
 	{ number = 1, name = "path", kind = "string" },
@@ -3982,10 +4003,19 @@ schema.Node = {
 	{ number = 36, name = "cues", kind = "message", repeated = true, message = "Cue" },
 	{ number = 37, name = "abilityBarPresses", kind = "bool" },
 	{ number = 38, name = "abilityDisplay", kind = "message", repeated = true, message = "AbilityRow" },
+	{ number = 39, name = "clock", kind = "message", message = "Clock" },
+	{ number = 40, name = "hideInChat", kind = "bool" },
 }
 schema.Node_VariablesEntry = {
 	{ number = 1, name = "key", kind = "string" },
 	{ number = 2, name = "value", kind = "string" },
+}
+schema.Clock = {
+	{ number = 1, name = "seconds", kind = "double" },
+	{ number = 2, name = "up", kind = "bool" },
+	{ number = 3, name = "paused", kind = "bool" },
+	{ number = 4, name = "format", kind = "enum", enum = ClockFormat },
+	{ number = 5, name = "run", kind = "uint32" },
 }
 schema.AbilityRow = {
 	{ number = 1, name = "player", kind = "uint32", class = Player, key = "slot" },
@@ -4003,6 +4033,7 @@ schema.Cue = {
 	{ number = 1, name = "number", kind = "uint32" },
 	{ number = 2, name = "sound", kind = "string" },
 	{ number = 3, name = "seconds", kind = "float" },
+	{ number = 4, name = "delay", kind = "float" },
 }
 schema.TextEntry = {
 	{ number = 1, name = "text", kind = "string" },
@@ -4078,6 +4109,24 @@ schema.Style = {
 	{ number = 43, name = "decoration", kind = "enum", enum = Decoration },
 	{ number = 44, name = "transform", kind = "message", message = "Transform" },
 	{ number = 45, name = "transition", kind = "message", message = "Transition" },
+	{ number = 46, name = "clip", kind = "message", message = "Clip" },
+	{ number = 47, name = "turn", kind = "float" },
+}
+schema.Clip = {
+	{ number = 1, name = "rect", kind = "message", optional = true, message = "ClipRect" },
+	{ number = 2, name = "radial", kind = "message", optional = true, message = "ClipRadial" },
+}
+schema.ClipRect = {
+	{ number = 1, name = "top", kind = "float" },
+	{ number = 2, name = "right", kind = "float" },
+	{ number = 3, name = "bottom", kind = "float" },
+	{ number = 4, name = "left", kind = "float" },
+}
+schema.ClipRadial = {
+	{ number = 1, name = "centerX", kind = "float", optional = true },
+	{ number = 2, name = "centerY", kind = "float", optional = true },
+	{ number = 3, name = "start", kind = "float" },
+	{ number = 4, name = "sweep", kind = "float" },
 }
 schema.Gradient = {
 	{ number = 1, name = "shape", kind = "enum", enum = GradientShape },
@@ -4108,6 +4157,13 @@ schema.Transition = {
 	{ number = 1, name = "seconds", kind = "float" },
 	{ number = 2, name = "delay", kind = "float" },
 	{ number = 3, name = "easing", kind = "enum", enum = Easing },
+	{ number = 4, name = "curve", kind = "message", message = "Curve" },
+}
+schema.Curve = {
+	{ number = 1, name = "x1", kind = "float" },
+	{ number = 2, name = "y1", kind = "float" },
+	{ number = 3, name = "x2", kind = "float" },
+	{ number = 4, name = "y2", kind = "float" },
 }
 schema.Length = {
 	{ number = 1, name = "pixels", kind = "float", optional = true },
@@ -4273,6 +4329,18 @@ function modlock.readFile(path: string): string?
 		return nil
 	end
 	return response.text
+end
+
+-- readFileBytes reads one of the mod's files from the same places as
+-- ReadFile, as bytes that need not be text, such as a packed table the mod
+-- views in place. A file in neither reads as unset. The host reads the
+-- whole file during the call.
+function modlock.readFileBytes(path: string): string?
+	local response = call("ReadFileBytes", "ReadFileRequest", { path = path }, "ReadFileBytesResponse")
+	if response == nil then
+		return nil
+	end
+	return response.data
 end
 
 -- writeFile replaces one of the mod's files in the host's copy, which
@@ -4536,7 +4604,8 @@ function modlock.addBot(options: BotOptions): Player?
 end
 
 -- blockInput withholds buttons from every player's hero until called
--- again. Stopping the mod releases them.
+-- again, and the spectator buttons from a spectating player's commands.
+-- Stopping the mod releases them.
 function modlock.blockInput(buttons: number): boolean
 	return call("BlockInput", "InputRequest", { buttons = buttons }) ~= nil
 end
@@ -5011,6 +5080,14 @@ modlock.Buttons = {
 	ultimate = 2 ^ 36,
 	-- parry is the melee parry button.
 	parry = 2 ^ 42,
+	-- specNext to specToggleTeam are the buttons a player's client sends in
+	-- place of the others while they spectate, with no hero of their own in
+	-- play: specNext and specPrev cycle the watched player, specMode changes
+	-- the camera mode, and specToggleTeam is the jump key, Space by default.
+	specNext = 2 ^ 49,
+	specPrev = 2 ^ 50,
+	specMode = 2 ^ 51,
+	specToggleTeam = 2 ^ 52,
 }
 
 -- Layers names collision layers for trace, as bits.

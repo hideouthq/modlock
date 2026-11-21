@@ -135,6 +135,12 @@ service Host {
   // directories are refused.
   rpc ReadFile(modlock.wasm.ReadFileRequest) returns (modlock.wasm.ReadFileResponse);
 
+  // ReadFileBytes reads one of the mod's files from the same places as
+  // ReadFile, as bytes that need not be text, such as a packed table the mod
+  // views in place. A file in neither reads as unset. The host reads the
+  // whole file during the call.
+  rpc ReadFileBytes(modlock.wasm.ReadFileRequest) returns (modlock.wasm.ReadFileBytesResponse);
+
   // WriteFile replaces one of the mod's files in the host's copy, which
   // outlives a restart and an update of the mod; the files the mod ships stay
   // as they are. The write is whole or not at all, and the host refuses one
@@ -543,11 +549,13 @@ service Host {
   rpc RemoveBot(modlock.wasm.players.PlayerRequest) returns (Empty);
 
   // BlockInput withholds buttons from every player's hero until called
-  // again. Stopping the mod releases them.
+  // again, and the spectator buttons from a spectating player's commands.
+  // Stopping the mod releases them.
   rpc BlockInput(modlock.wasm.InputRequest) returns (Empty);
 
   // BlockPlayerInput withholds buttons from the player's hero until called
-  // again, on top of the block on everyone. Zero releases the player.
+  // again, and the spectator buttons from their commands while they
+  // spectate, on top of the block on everyone. Zero releases the player.
   rpc BlockPlayerInput(modlock.wasm.PlayerInputRequest) returns (Empty);
 
   // Press presses buttons at the player's next input, even through a block.

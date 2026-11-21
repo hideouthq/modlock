@@ -195,6 +195,20 @@ class GameServices {
   // spends that command's presses.
   std::optional<gameinterop::CommandHook::Command> Driven(int32_t slot);
 
+  // Observed records a player's button changes from their commands, which
+  // arrive whatever their hero does: dead, spectating, or parked while the
+  // player watches through another camera. It returns the spectator buttons
+  // the games block for the player, which the commands then withhold.
+  uint64_t Observed(int32_t slot, uint64_t pressed, uint64_t released);
+
+  // Record queues a player's button changes for every game, once: a change
+  // the other path (the input hook or the commands) recorded in the last two
+  // ticks is dropped, since both see the same press.
+  void Record(int32_t slot, uint64_t pressed, uint64_t released);
+
+  // Tick is the server's simulation tick, or nothing when it cannot be read.
+  std::optional<int32_t> Tick();
+
   // Withhold keeps from one player every object a mod hid from them and
   // every entity a mod shows only to others.
   void Withhold(gameinterop::TransmitSet& set);
@@ -272,6 +286,16 @@ class GameServices {
   bool input_wanted_ = false;
   // held_ is each player's held buttons before blocking, for blocked edges.
   std::array<uint64_t, gameinterop::kMaxPlayerSlots> held_{};
+
+  // recorded_ is each player's changes recorded since a tick, so the input
+  // hook and the commands record a press once between them (Record).
+  struct Recorded {
+    int32_t tick = 0;
+    uint64_t pressed = 0;
+    uint64_t released = 0;
+  };
+
+  std::array<Recorded, gameinterop::kMaxPlayerSlots> recorded_{};
   std::optional<gameinterop::ProjectileImpactHook> impacts_;
   // voice_ drops the voice lines mods silence, installed the first time one
   // does; voice_concepts_ caches each concept name's value.
@@ -346,9 +370,9 @@ class Game : public HostService {
   // blocks stay for the next world.
   void WorldEnding();
 
-  // WorldReady resolves at map load what the first pawn, hero selection and
-  // modifier state calls would otherwise look up in the server module, so
-  // none of those first calls stalls a frame with players in it.
+  // WorldReady resolves at map load what a mod's calls would otherwise look
+  // up in the server module on first use, every recorded signature included,
+  // so no first call stalls a frame with players in it.
   void WorldReady();
 
   // Leave forgets what the mod set for the player in slot, who left, so the

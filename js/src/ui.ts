@@ -56,7 +56,8 @@
 //
 // hideHud hides parts of the game's own HUD from a player, such as their
 // health bar or the notice for each boon, until the mod lists them no more,
-// hides the player's interface, or stops. Modlock gives them back on its own
+// hides the player's interface, or stops. hideHudForAll hides parts from
+// every player, those who join later included, on top of each player's own. Modlock gives them back on its own
 // when the player leaves, by the menu, to the hideout or with a server that
 // goes away, so a mod has nothing to clean up.
 //
@@ -81,6 +82,9 @@ import {
   type AbilityRow as WireAbilityRow,
   Align,
   type Change,
+  type Clip as WireClip,
+  type Clock as WireClock,
+  ClockFormat,
   type Cue,
   type Cycle as WireCycle,
   Decoration,
@@ -105,8 +109,14 @@ import {
   UiRequest,
   Weight,
 } from '../../src/wasm/ui/ui.pb.js'
+import { chatLines, expireChat, forgetChat, hearChat } from './chat.js'
 import { heroes } from './heroes.js'
-import { type Player, readField, type Wheel } from './host.gen.js'
+import {
+  type ChatEvent,
+  type Player,
+  readField,
+  type Wheel,
+} from './host.gen.js'
 import { call } from './host.js'
 import { players } from './players.js'
 
@@ -158,11 +168,48 @@ export interface Shadow {
 /**
  * Transition animates each change of an element's style, and the move to its
  * hover style and back, over seconds after delay. Easing is 'out' unless set.
+ * Curve shapes the change in place of easing as a cubic Bezier curve's two
+ * control points, [x1, y1, x2, y2], as CSS's cubic-bezier: each x is a share
+ * of the time from 0 to 1, and a y outside 0 to 1 overshoots, such as
+ * [0.75, 1.5, 0.95, 1.4] for a pop that springs past its end.
  */
 export interface Transition {
   seconds: number
   delay?: number
   easing?: 'out' | 'in' | 'inOut' | 'linear'
+  curve?: readonly number[]
+}
+
+/**
+ * Clip draws only part of an element and its children. Rect is a box,
+ * [top, right, bottom, left], each side a percent of the element's size from
+ * its top or left edge, so [0, 50, 100, 0] is its left half. Without rect, the
+ * clip is a slice of a circle about center, [x, y] percents of the element's
+ * size and its middle unless set, through sweep degrees from start, as the
+ * game draws a cooldown ring. A transition does not ease a clip; draw it
+ * again to fill a ring over time.
+ */
+export interface Clip {
+  rect?: readonly number[]
+  center?: readonly number[]
+  start?: number
+  sweep?: number
+}
+
+/**
+ * Clock counts a label's time in the player's game, so the mod draws it once
+ * and not every second. It starts at seconds as the player first sees it and
+ * counts down to zero, or up when up is set, unless paused. Format writes
+ * 'minutes' as "4:05", 'seconds' as "245" or 'tenths' as "9.4". A change to
+ * any of its fields starts the count again from seconds; change run to
+ * restart the same clock, such as at each round.
+ */
+export interface Clock {
+  seconds: number
+  up?: boolean
+  paused?: boolean
+  format?: 'minutes' | 'seconds' | 'tenths'
+  run?: number
 }
 
 /**
@@ -267,6 +314,14 @@ export interface Style {
   /** rotate turns the element clockwise, in degrees. */
   rotate?: number
   /**
+   * turn turns the element clockwise, in degrees, before its other
+   * transforms. A transition eases the angle itself, so a turn from 0 to 720
+   * spins twice, where rotate eases the shortest way round.
+   */
+  turn?: number
+  /** clip draws only part of the element and its children. */
+  clip?: Clip
+  /**
    * origin is the point the element scales and turns about, as [x, y]
    * percents of its size; unset is its center.
    */
@@ -289,9 +344,12 @@ export interface Style {
  * bar, 'status' the game's mark in the top-left corner, 'stats' the weapon,
  * spirit and vitality stats at the lower left, 'heroPicker' the screen a
  * player without a hero picks one on, 'brokerCountdown' the countdown in the
- * Broker's window, and 'all' the whole HUD but the mods' own interfaces and
- * the game's tooltips, for a screen that takes the player's whole view.
- * Whatever a part does not name stays, such as the crosshair and chat.
+ * Broker's window, 'minimapPlayers' every player's icon on the minimap, the
+ * player's own included, 'inventory' the purchased items beside the stats,
+ * 'crosshair' the crosshair with its clip ring, ammo count and stamina pips,
+ * and 'all' the whole HUD but the mods' own interfaces, the game's tooltips
+ * and its chat, for a screen that takes the player's whole view. Whatever a
+ * part does not name stays.
  */
 export type HudPart =
   | 'levelUp'
@@ -305,6 +363,9 @@ export type HudPart =
   | 'stats'
   | 'heroPicker'
   | 'brokerCountdown'
+  | 'minimapPlayers'
+  | 'inventory'
+  | 'crosshair'
   | 'all'
 
 /** Child is anything an element may hold. Text becomes a label. */
@@ -366,8 +427,10 @@ export interface Props {
   readonly enter?: Style
   readonly exit?: Style
   readonly cycle?: Cycle
+  readonly hideInChat?: boolean
   readonly token?: string
   readonly variables?: Readonly<Record<string, string | number>>
+  readonly clock?: Clock
   readonly steamId?: bigint
   readonly value?: string | number
   readonly placeholder?: string
@@ -407,6 +470,11 @@ export interface ElementProps {
   exit?: Style
   /** cycle swings the element to another style and back while it shows. */
   cycle?: Cycle
+  /**
+   * hideInChat hides the element while the player has the game's chat box
+   * open, which then shows the chat history itself.
+   */
+  hideInChat?: boolean
 }
 
 /**
@@ -438,12 +506,14 @@ export interface PanelProps extends ElementProps {
 /**
  * LabelProps show text: the label's text children, joined, or the game's text
  * for token in the player's language, with each {s:name} place in it filled
- * from variables.
+ * from variables. A clock's time stands in for the text, or fills the token's
+ * {s:clock} place.
  */
 export interface LabelProps extends ElementProps {
   children?: Child
   token?: string
   variables?: Readonly<Record<string, string | number>>
+  clock?: Clock
 }
 
 /** AvatarProps show the Steam picture of the player with steamId. */
@@ -512,7 +582,11 @@ export type Scaling =
   | 'fitHeight'
   | 'none'
 
-/** ImageProps show an image from the game's content, such as 'file://{images}/hud/icon.png'. */
+/**
+ * ImageProps show an image from the game's content, such as
+ * 'file://{images}/hud/icon.png', or from the mod's own content with {addon}
+ * in place of its addon's name, such as 'file://{images}/{addon}/mark.png'.
+ */
 export interface ImageProps extends ElementProps {
   src: string
   scaling?: Scaling
@@ -635,7 +709,7 @@ export function Fragment(props: { children?: Child }): Child {
  */
 export function show(player: Player, root: Child): boolean {
   views.set(player.slot, { ...view(player), root })
-  return draw(player)
+  return draw(player, ['view'])
 }
 
 /**
@@ -644,7 +718,17 @@ export function show(player: Player, root: Child): boolean {
  */
 export function hideHud(player: Player, parts: readonly HudPart[]): boolean {
   views.set(player.slot, { ...view(player), hud: parts })
-  return draw(player)
+  return draw(player, [])
+}
+
+/**
+ * hideHudForAll hides parts of the game's own HUD from every player, now and
+ * as each joins, until the next call; an empty list shows them all again. A
+ * player's own hideHud list adds to it.
+ */
+export function hideHudForAll(parts: readonly HudPart[]): void {
+  everyoneHud = parts
+  drawAll([])
 }
 
 /**
@@ -663,7 +747,7 @@ export function freeCursor(player: Player, free: boolean): boolean {
     cursor: free,
     asks: free ? current.asks + 1 : current.asks,
   })
-  return draw(player)
+  return draw(player, [])
 }
 
 /** AbilityBarHandler takes a click on the ability in slot, 0 to 3. */
@@ -688,7 +772,7 @@ export function abilityBarPresses(
     ...view(player),
     bar: onPress ? { handler: onPress } : undefined,
   })
-  return draw(player)
+  return draw(player, [])
 }
 
 /** ShownAbility is the ability abilityDisplay shows in one slot. */
@@ -724,7 +808,7 @@ export function abilityDisplay(
   rows: readonly AbilityRow[] = [],
 ): boolean {
   views.set(viewer.slot, { ...view(viewer), display: rows.slice(0, 64) })
-  return draw(viewer)
+  return draw(viewer, [])
 }
 
 /**
@@ -797,7 +881,7 @@ export function sheet(path: string): boolean {
   // Redraw every interface with the new sheet.
   sheets.push(path)
   for (const current of views.values()) {
-    draw(current.player)
+    draw(current.player, [])
   }
   return true
 }
@@ -830,17 +914,45 @@ export function route(player: Player, name: string, value: unknown): boolean {
     routes.set(name, encoded)
   }
   views.set(player.slot, { ...view(player), routes })
-  return draw(player)
+  return draw(player, ['routes'])
 }
 
 /** routeName matches the name of a route, as the renderer accepts it. */
 const routeName = /^[\w.-]+$/
 
-/** hide removes the interface, the routes and the notices the mod shows player. */
+/**
+ * hide removes the interface, the routes and the notices the mod shows
+ * player. What the mod shows every player, such as hideHudForAll's parts,
+ * stays.
+ */
 export function hide(player: Player): boolean {
   views.delete(player.slot)
   screens.delete(player.slot)
-  return send(player.slot, { reset: true })
+  if (!send(player.slot, { reset: true })) return false
+  return everyoneHud.length === 0 || draw(player)
+}
+
+/**
+ * joined draws what the mod shows every player for a player who joined,
+ * such as hideHudForAll's parts.
+ */
+export function joined(player: Player): void {
+  if (everyoneHud.length !== 0) draw(player)
+}
+
+/**
+ * left forgets what the mod showed the player who left, so the next person
+ * in the slot starts with nothing of theirs, and takes down their chat line.
+ */
+export function left(player: Player): void {
+  views.delete(player.slot)
+  screens.delete(player.slot)
+  if (forgetChat(player.slot)) drawAll(['chat'])
+}
+
+/** heard shows a chat line to every player who may read it, if the mod shows chat lines. */
+export function heard(line: ChatEvent): void {
+  if (hearChat(line, now)) drawAll(['chat'])
 }
 
 /**
@@ -854,27 +966,34 @@ export function toast(player: Player, text: string, seconds = 4): boolean {
     ...current,
     notices: [...current.notices, notice].slice(-maxNotices),
   })
-  return draw(player)
+  return draw(player, ['notices'])
 }
 
 /**
  * uiSound plays the game's sound event sound, such as 'UI.ItemDraft.Start', in
  * player's game alone, once; seconds cuts it after that long, keeping only its
- * start. It plays with the next screen the player reads, and not at all if
- * the player reads it only after the mod's next few sounds.
+ * start, and delay waits that long before it plays, so one draw can time a
+ * run of sounds, such as a wheel's ticks. It plays with the next screen the
+ * player reads, and not at all if the player reads it only after the mod's
+ * next few sounds, or the mod clears its interface before its delay ends.
  */
 export function uiSound(
   player: Player,
   sound: string,
-  options: { readonly seconds?: number } = {},
+  options: { readonly seconds?: number; readonly delay?: number } = {},
 ): boolean {
   const current = view(player)
-  const cue = { number: nextCue++, sound, seconds: options.seconds ?? 0 }
+  const cue = {
+    number: nextCue++,
+    sound,
+    seconds: options.seconds ?? 0,
+    delay: options.delay ?? 0,
+  }
   views.set(player.slot, {
     ...current,
     cues: [...current.cues, cue].slice(-maxCues),
   })
-  return draw(player)
+  return draw(player, [])
 }
 
 /**
@@ -890,7 +1009,7 @@ export function press(
 ): void {
   // A press with an action came from a layout's script, not a button.
   if (action !== '') {
-    const pressed = screens.get(player.slot)?.actions.get(node)
+    const pressed = partOf(player.slot, node)?.actions.get(node)
     if (pressed) {
       let value: unknown = undefined
       try {
@@ -910,7 +1029,7 @@ export function press(
     views.get(player.slot)?.bar?.handler(player, Number(bar[1]))
     return
   }
-  const pressed = screens.get(player.slot)?.presses.get(node)
+  const pressed = partOf(player.slot, node)?.presses.get(node)
   if (pressed) {
     pressed.handler(player)
   }
@@ -926,24 +1045,30 @@ export function change(
   value: string | number | boolean | Wheel | undefined,
 ): void {
   if (typeof value === 'object' && value !== null) {
-    screens.get(player.slot)?.wheels.get(node)?.handler(player, value)
+    partOf(player.slot, node)?.wheels.get(node)?.handler(player, value)
     return
   }
-  const changed = screens.get(player.slot)?.changes.get(node)
+  const changed = partOf(player.slot, node)?.changes.get(node)
   if (changed) {
     changed.handler(player, value)
   }
 }
 
-/** tick advances the clock to the frame at seconds and fades expiring notices. */
+/**
+ * tick advances the clock to the frame at seconds and fades expiring notices.
+ * It redraws a player only on the frame one of their notices expires, since
+ * the renderer animates the fade itself; a frame with no expiry renders
+ * nothing.
+ */
 export function tick(seconds: number): void {
   now = seconds
+  if (expireChat(now)) drawAll(['chat'])
   for (const current of views.values()) {
-    if (current.notices.length === 0) {
+    if (!current.notices.some((notice) => notice.until <= now)) {
       continue
     }
     current.notices = current.notices.filter((notice) => notice.until > now)
-    draw(current.player)
+    draw(current.player, ['notices'])
   }
 }
 
@@ -976,6 +1101,9 @@ interface Notice {
 
 /** views holds what the mod shows each player, by slot. */
 const views = new Map<number, View>()
+
+/** everyoneHud is the parts of the game's HUD hidden from every player. */
+let everyoneHud: readonly HudPart[] = []
 
 /** now is the game clock at the last frame, in seconds. */
 let now = 0
@@ -1020,44 +1148,32 @@ function view(player: Player): View {
   )
 }
 
-/** draw sends what changed in player's interface and notices. */
-function draw(player: Player): boolean {
-  // Render the player's view and any notices against the last screen sent.
-  const current = view(player)
-  const root = [
-    current.root,
-    current.notices.length !== 0 && notices(current.notices),
-  ]
+/**
+ * Layer names one independent subtree of a player's interface: the mod's
+ * own tree, the chat lines, the notices and the routes. Each lays out and
+ * diffs alone, so a change to one costs only its own nodes.
+ */
+type Layer = 'view' | 'chat' | 'notices' | 'routes'
+
+/** layers lists every layer, the root's children in drawing order first. */
+const layers: readonly Layer[] = ['view', 'chat', 'notices', 'routes']
+
+/**
+ * draw sends what changed in player's interface: the root, which holds the
+ * hidden HUD parts, the cursor, the sheets and the sounds, and the changed
+ * layers, laid out again while the others keep the nodes they hold. A player
+ * with no screen yet gets every layer.
+ */
+function draw(player: Player, changed: readonly Layer[] = layers): boolean {
+  // Lay out the changed layers against the last screen sent.
   const previous = screens.get(player.slot)
-  const hud = current.hud.map((part) => hudParts[part])
-  const display = displayRows(player, current.display)
-  const next = render(
-    previous,
-    root,
-    hud,
-    current.cursor,
-    current.asks,
-    current.routes,
-    current.cues,
-    current.bar !== undefined,
-    display,
-  )
+  const next = compose(player, previous, previous ? changed : layers)
   const change = diff(previous, next)
 
   // Send the change; a failed send means the player may have left, so send
   // the screen whole.
   if (change && !send(player.slot, change)) {
-    const whole = render(
-      undefined,
-      root,
-      hud,
-      current.cursor,
-      current.asks,
-      current.routes,
-      current.cues,
-      current.bar !== undefined,
-      display,
-    )
+    const whole = compose(player, undefined, layers)
     if (!send(player.slot, diff(undefined, whole)!)) {
       screens.delete(player.slot)
       return false
@@ -1069,6 +1185,97 @@ function draw(player: Player): boolean {
   // Keep the screen the player now holds.
   screens.set(player.slot, next)
   return true
+}
+
+/**
+ * drawAll draws every player in the game, as after a change all of them see,
+ * laying out only the changed layers.
+ */
+function drawAll(changed: readonly Layer[] = layers): void {
+  for (const { player } of players()) {
+    draw(player, changed)
+  }
+}
+
+/**
+ * compose builds player's screen from previous, laying out the changed
+ * layers and keeping the rest as they were.
+ */
+function compose(
+  player: Player,
+  previous: Screen | undefined,
+  changed: readonly Layer[],
+): Screen {
+  // Each changed layer continues the screen's id counter.
+  const current = view(player)
+  const screen: Screen = {
+    parts: new Map(previous?.parts),
+    root: { node: {}, encoded: '' },
+    next: previous?.next ?? 0,
+  }
+  for (const layer of changed) {
+    const layout = new Layout(previous?.parts.get(layer), screen)
+    if (layer === 'routes') {
+      // A route's id holds a colon, which no element's id does.
+      for (const [name, data] of current.routes) {
+        layout.add({ id: `route:${name}`, kind: Kind.ROUTE, route: name, data })
+      }
+    } else {
+      layout.part.top = place(layout, content(layer, current), '/')
+    }
+    screen.parts.set(layer, layout.part)
+  }
+
+  // The root is the full-screen panel the layers hang from, and it lists the
+  // parts of the game's HUD to hide, whether the cursor is free, the mod's
+  // sheets and its last sounds.
+  const children: string[] = []
+  for (const layer of layers) {
+    children.push(...(screen.parts.get(layer)?.top ?? []))
+  }
+  const root: Node = {
+    id: '',
+    kind: Kind.PANEL,
+    children,
+    hideHud: hiddenParts(current.hud),
+    freeCursor: current.cursor,
+    freeCursorAsks: current.asks,
+    sheets: [...sheets],
+    cues: [...current.cues],
+    abilityBarPresses: current.bar !== undefined,
+    abilityDisplay: displayRows(player, current.display),
+  }
+
+  // unknown to JSON.stringify, as Part.add explains: scriptc stringifies
+  // unknown but not Node's full record type. The root carries no Steam id.
+  const value: unknown = root
+  screen.root = { node: root, encoded: JSON.stringify(value) }
+  return screen
+}
+
+/** content is what a layer of current draws. */
+function content(layer: Layer, current: View): Child {
+  switch (layer) {
+    case 'view':
+      return current.root
+    case 'chat':
+      return chatLines(current.player)
+    case 'notices':
+      return current.notices.length !== 0 && notices(current.notices)
+    default:
+      return undefined
+  }
+}
+
+/** hiddenParts is the wire list of the parts hidden from every player and in own. */
+function hiddenParts(own: readonly HudPart[]): WireHudPart[] {
+  const parts: WireHudPart[] = []
+  for (const part of everyoneHud) parts.push(hudParts[part])
+  for (const part of own) {
+    const wire = hudParts[part]
+    if (!parts.includes(wire)) parts.push(wire)
+  }
+  return parts
 }
 
 /**
@@ -1110,8 +1317,11 @@ function notices(stack: readonly Notice[]): Child {
   return jsx('panel', { style, exit: noticeMotion.exit, children: labels })
 }
 
-/** Screen is what one player's interface holds, as the host last accepted it. */
-interface Screen {
+/**
+ * Part is what one layer of a player's interface holds, as the host last
+ * accepted it.
+ */
+interface Part {
   /** nodes maps each node's id to its encoding, to find what changed. */
   readonly nodes: Map<string, { node: Node; encoded: string }>
   /**
@@ -1134,74 +1344,53 @@ interface Screen {
     string,
     { readonly handler: (player: Player, wheel: Wheel) => void }
   >
-  /** next numbers the next new node, so an id is never reused. */
+  /** top lists the ids of the layer's outermost nodes, the root's children. */
+  top: string[]
+}
+
+/** Screen is what one player's interface holds: the root and its layers. */
+interface Screen {
+  readonly parts: Map<Layer, Part>
+  root: { node: Node; encoded: string }
+  /** next numbers the next new node in any layer, so an id is never reused. */
   next: number
 }
 
 /** screens holds each player's interface by slot. */
 const screens = new Map<number, Screen>()
 
-/**
- * render lays root out as nodes, keeping the ids of elements that stayed in
- * place, beside a node for each route.
- */
-function render(
-  previous: Screen | undefined,
-  root: Child,
-  hud: readonly WireHudPart[],
-  cursor: boolean,
-  asks: number,
-  routes: ReadonlyMap<string, string>,
-  cues: readonly Cue[],
-  bar: boolean,
-  display: readonly WireAbilityRow[],
-): Screen {
-  // The root is the full-screen panel the elements hang from, and it lists
-  // the parts of the game's HUD to hide, whether the cursor is free, the
-  // mod's sheets and its last sounds.
-  const layout = new Layout(previous)
-  layout.add({
-    id: '',
-    kind: Kind.PANEL,
-    children: place(layout, root, '/'),
-    hideHud: [...hud],
-    freeCursor: cursor,
-    freeCursorAsks: asks,
-    sheets: [...sheets],
-    cues: [...cues],
-    abilityBarPresses: bar,
-    abilityDisplay: [...display],
-  })
-
-  // A route's id holds a colon, which no element's id does.
-  for (const [name, data] of routes) {
-    layout.add({ id: `route:${name}`, kind: Kind.ROUTE, route: name, data })
+/** partOf finds the layer of slot's screen that holds the node with id. */
+function partOf(slot: number, id: string): Part | undefined {
+  for (const part of screens.get(slot)?.parts.values() ?? []) {
+    if (part.nodes.has(id)) return part
   }
-  return layout.screen
+  return undefined
 }
 
 /**
- * Layout holds one screen while place lays it out. The steps are not closures:
+ * Layout holds one layer while place lays it out. The steps are not closures:
  * a closure that calls itself holds itself, and QuickJS frees such a cycle,
  * with the screens it reaches, only in a full collection that walks the mod's
  * whole heap in one frame. place is a function rather than a method because
  * scriptc cannot hold a method that takes a Child as a prototype value.
  */
 class Layout {
-  readonly screen: Screen
-  private readonly previous: Screen | undefined
+  readonly part: Part
+  private readonly previous: Part | undefined
+  private readonly screen: Screen
 
-  /** The layout continues previous's id counter and keeps its ids. */
-  constructor(previous: Screen | undefined) {
+  /** The layout keeps previous's ids and numbers new nodes from screen's counter. */
+  constructor(previous: Part | undefined, screen: Screen) {
     this.previous = previous
-    this.screen = {
+    this.screen = screen
+    this.part = {
       nodes: new Map(),
       ids: new Map(),
       presses: new Map(),
       changes: new Map(),
       actions: new Map(),
       wheels: new Map(),
-      next: previous?.next ?? 0,
+      top: [],
     }
   }
 
@@ -1216,7 +1405,7 @@ class Layout {
         ? node
         : { ...node, steamId: String(node.steamId) }
     const encoded = JSON.stringify(value)
-    this.screen.nodes.set(node.id!, { node, encoded })
+    this.part.nodes.set(node.id!, { node, encoded })
   }
 
   /** id returns the node id for the element at place. */
@@ -1225,7 +1414,7 @@ class Layout {
     if (found === undefined) {
       found = (this.screen.next++).toString(36)
     }
-    this.screen.ids.set(place, found)
+    this.part.ids.set(place, found)
     return found
   }
 }
@@ -1274,6 +1463,7 @@ function place(layout: Layout, child: Child, at: string): string[] {
     exit: wireStyle(props.exit),
     cycle: cycle(props.cycle),
     classes: classes(props.class),
+    hideInChat: props.hideInChat || undefined,
   }
   switch (child.type) {
     case 'label':
@@ -1281,6 +1471,7 @@ function place(layout: Layout, child: Child, at: string): string[] {
       node.text = text(props.children)
       node.token = props.token
       node.variables = variables(props.variables)
+      node.clock = clock(props.clock)
       break
     case 'avatar':
       node.kind = Kind.AVATAR
@@ -1309,7 +1500,7 @@ function place(layout: Layout, child: Child, at: string): string[] {
       node.disabled = props.disabled
       // A disabled button's press runs nothing, whoever sends it.
       if (props.onPress && !props.disabled) {
-        layout.screen.presses.set(node.id!, { handler: props.onPress })
+        layout.part.presses.set(node.id!, { handler: props.onPress })
       }
       node.children = place(layout, props.children, `${at}/`)
       break
@@ -1319,7 +1510,7 @@ function place(layout: Layout, child: Child, at: string): string[] {
       node.data =
         props.data === undefined ? '' : (JSON.stringify(props.data) ?? '')
       if (props.onAction) {
-        layout.screen.actions.set(node.id!, { handler: props.onAction })
+        layout.part.actions.set(node.id!, { handler: props.onAction })
       }
       break
     default:
@@ -1347,7 +1538,7 @@ function input(
   node.kind = Kind.INPUT
   node.disabled = props.disabled
   if (props.onChange && !props.disabled) {
-    layout.screen.changes.set(node.id!, { handler: props.onChange })
+    layout.part.changes.set(node.id!, { handler: props.onChange })
   }
 
   // Each control carries its value and its bounds.
@@ -1364,7 +1555,7 @@ function input(
       break
     case 'slider':
       if (props.onWheel && !props.disabled) {
-        layout.screen.wheels.set(node.id!, { handler: props.onWheel })
+        layout.part.wheels.set(node.id!, { handler: props.onWheel })
       }
       node.input = {
         case: 'slider',
@@ -1389,6 +1580,49 @@ function input(
           selected: props.selected,
         },
       }
+  }
+}
+
+/** clock encodes a label's clock. */
+function clock(value: Clock | undefined): WireClock | undefined {
+  if (!value) {
+    return undefined
+  }
+  return {
+    seconds: value.seconds,
+    up: value.up,
+    paused: value.paused,
+    format: value.format === undefined ? undefined : clockFormats[value.format],
+    run: value.run,
+  }
+}
+
+/** clockFormats maps each clock format to its wire value. */
+const clockFormats = {
+  minutes: ClockFormat.MINUTES,
+  seconds: ClockFormat.SECONDS,
+  tenths: ClockFormat.TENTHS,
+}
+
+/** clip encodes a clip: a box when rect is set, otherwise a slice. */
+function clip(value: Clip | undefined): WireClip | undefined {
+  if (!value) {
+    return undefined
+  }
+  if (value.rect) {
+    const [top, right, bottom, left] = value.rect
+    return { shape: { case: 'rect', value: { top, right, bottom, left } } }
+  }
+  return {
+    shape: {
+      case: 'radial',
+      value: {
+        centerX: value.center?.[0],
+        centerY: value.center?.[1],
+        start: value.start,
+        sweep: value.sweep,
+      },
+    },
   }
 }
 
@@ -1418,16 +1652,27 @@ function cycle(value: Cycle | undefined): WireCycle | undefined {
   }
 }
 
-/** diff returns the change from previous to next, or undefined when nothing changed. */
+/**
+ * diff returns the change from previous to next, or undefined when nothing
+ * changed. A layer next shares with previous is unchanged and not walked.
+ */
 function diff(previous: Screen | undefined, next: Screen): Change | undefined {
-  const set = [...next.nodes.values()]
-    .filter(
-      ({ node, encoded }) => previous?.nodes.get(node.id!)?.encoded !== encoded,
-    )
-    .map(({ node }) => node)
-  const removed = [...(previous?.nodes.keys() ?? [])].filter(
-    (id) => !next.nodes.has(id),
-  )
+  // The root goes when it changed, and each changed layer sends its new and
+  // changed nodes and removes the ones it no longer holds.
+  const set: Node[] = []
+  const removed: string[] = []
+  if (previous?.root.encoded !== next.root.encoded) set.push(next.root.node)
+  for (const layer of layers) {
+    const before = previous?.parts.get(layer)
+    const after = next.parts.get(layer)
+    if (before === after) continue
+    for (const { node, encoded } of after?.nodes.values() ?? []) {
+      if (before?.nodes.get(node.id!)?.encoded !== encoded) set.push(node)
+    }
+    for (const id of before?.nodes.keys() ?? []) {
+      if (!after?.nodes.has(id)) removed.push(id)
+    }
+  }
   if (previous && set.length === 0 && removed.length === 0) {
     return undefined
   }
@@ -1494,6 +1739,9 @@ const hudParts = {
   stats: WireHudPart.STATS,
   heroPicker: WireHudPart.HERO_PICKER,
   brokerCountdown: WireHudPart.BROKER_COUNTDOWN,
+  minimapPlayers: WireHudPart.MINIMAP_PLAYERS,
+  inventory: WireHudPart.INVENTORY,
+  crosshair: WireHudPart.CROSSHAIR,
   all: WireHudPart.ALL,
 } as const
 
@@ -1647,6 +1895,8 @@ function wireStyle(style: Style | undefined): WireStyle | undefined {
         ? undefined
         : decorations[style.decoration],
     transform: transform(style),
+    turn: style.turn,
+    clip: clip(style.clip),
     transition: transition(style.transition),
   }
 }
@@ -1713,6 +1963,14 @@ function transition(
     seconds: value.seconds,
     delay: value.delay,
     easing: value.easing === undefined ? undefined : easings[value.easing],
+    curve: value.curve
+      ? {
+          x1: value.curve[0],
+          y1: value.curve[1],
+          x2: value.curve[2],
+          y2: value.curve[3],
+        }
+      : undefined,
   }
 }
 

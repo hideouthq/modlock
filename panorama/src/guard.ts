@@ -62,9 +62,11 @@ export const WALK_SECONDS = 1
 
 /**
  * KEPT_ID names the panels HUD_PART_ALL leaves: the mods' interfaces under
- * Modlock's and Hyperline's panels, and the game's tooltips.
+ * Modlock's and Hyperline's panels, the game's tooltips, and its chat: the
+ * history and text box Enter opens (Chat) and the top bar's bubbles
+ * (Team1Chat, Team2Chat), so players can still read and type messages.
  */
-const KEPT_ID = /^(Modlock|Hyperline|TooltipManager$)/
+const KEPT_ID = /^(Modlock|Hyperline|TooltipManager$|Chat$|Team[12]Chat$)/
 
 /** WALK_LIMIT bounds the panels a walk of the whole HUD looks at. */
 const WALK_LIMIT = 20000
@@ -156,6 +158,15 @@ export const finders: Partial<Record<HudPart, Finder>> = {
     const countdown = popup?.FindChildTraverse('Countdown')
     return countdown ? [countdown] : []
   },
+  // Each player's minimap icon, and the player's own view cone, carry the
+  // player class (hud_minimap.xml's MinimapPlayerSnippet).
+  [HudPart.MINIMAP_PLAYERS]: (hud) =>
+    hud
+      .FindChildTraverse('minimap_persp')
+      ?.FindChildrenWithClassTraverse('player') ?? [],
+  [HudPart.INVENTORY]: (hud) => ownPanel(hud, 'ModsContainer'),
+  // The ammo warnings sit beside the crosshair, not in it.
+  [HudPart.CROSSHAIR]: (hud) => ownPanel(hud, 'crosshair'),
   [HudPart.ALL]: (hud, scope) => everything(hud, scope),
 }
 

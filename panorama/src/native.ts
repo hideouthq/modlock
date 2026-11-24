@@ -11,7 +11,7 @@
 // visible on before it writes the original, so a cleared style leaves the
 // panel to the game's CSS instead of hidden.
 
-import { HIDDEN_MARK } from './guard.js'
+import { HIDDEN_MARK, recorded } from './guard.js'
 
 /** NativePanel is the part of a game panel native changes use. */
 export interface NativePanel {
@@ -223,7 +223,7 @@ export class NativeChanges {
       const saved = readSaved(panel)
       for (const [key] of fresh) {
         const entry = (saved[key] ??= {
-          original: guardHid(panel, key) ? null : read(panel, key),
+          original: unguarded(panel, key),
           owners: [],
         })
         entry.owners.push(this.owner)
@@ -237,15 +237,19 @@ export class NativeChanges {
 }
 
 /**
- * guardHid reports whether key is a visibility the stock guard wrote, which
- * is not the panel's original. The guard's "shown" mark means the inline
- * collapse is its own; it leaves the panel to the owners from then on.
+ * unguarded reads key's original: a visibility the stock guard collapsed is
+ * the value its mark records the collapse replaced, and it leaves the panel
+ * to the owners from then on.
  */
-function guardHid(panel: NativePanel, key: Key): boolean {
-  return (
+function unguarded(panel: NativePanel, key: Key): Value {
+  const mark = panel.GetAttributeString(HIDDEN_MARK, '')
+  if (
     key === 'style.visibility' &&
-    panel.GetAttributeString(HIDDEN_MARK, '') === 'shown'
+    mark !== '' &&
+    panel.style.visibility === 'collapse'
   )
+    return recorded(mark)
+  return read(panel, key)
 }
 
 /**

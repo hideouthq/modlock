@@ -26,7 +26,6 @@ When Deadlock is not installed, `dev` and `play` run your mod in the sandbox ins
 | --------------------- | -------------------------------------------------------------------------------------------------------- |
 | `--no-game`           | Run the server without launching Deadlock.                                                               |
 | `--port PORT`         | Serve on a UDP port other than 27067.                                                                    |
-| `--arg VALUE`         | Pass `VALUE` to the mods' `onStart` handlers. Repeatable.                                                |
 | `--sandbox`           | Run in the sandbox even when the game is installed.                                                      |
 | `--watch=false`       | Build once instead of reloading on each save. `play` then runs existing builds and can run several mods. |
 | `--release`           | Build as `publish` does.                                                                                 |
@@ -34,6 +33,7 @@ When Deadlock is not installed, `dev` and `play` run your mod in the sandbox ins
 | `--ui-port PORT`      | Serve the mods' interfaces to the game on a port other than 4320. `0` turns them off.                    |
 | `--ui-relay ORIGIN`   | Reach the interfaces through a site other than `https://hyperline.gg`.                                   |
 | `--preview-port PORT` | Serve the browser preview of the interface on a port other than 4322. `0` turns it off.                  |
+| `-- ARG...`           | Pass the words after `--` to the mods' `onStart` handlers, as in `modlock dev -- probe 4`.               |
 
 While `dev` or `play` watches a project, saving a file rebuilds the mod and replaces the running one. Saving files in `build/` and `node_modules`, hidden files and `*.log` files does not. The terminal shows the mod's log, its reloads and the players who join, and the server's own console output goes to `build/server.log`. In the sandbox, a line you type in the terminal is sent as chat from the stand-in player.
 
@@ -79,7 +79,7 @@ These commands read and write the game's own file formats, and they work without
 | `modlock studio`                           | Browse game assets and preview models, textures and sounds in Modlock Studio.                                                                     |
 | `modlock studio render [NAME=]MODEL...`    | Render models from the game's archive to PNG files with a transparent background.                                                                 |
 
-`panorama compile` copies every other file in `DIR` into the archive unchanged, so compiled resources such as images go in beside the layouts. `-o` writes to another archive, or to a directory. A style sheet's `url()` can point to an image or another sheet in the game's files, written as `s2r://`, `file://{images}/` or `file://{resources}/`. The compiler rewrites it to the path of the resource the game loads: `file://{images}/icons/mark.png` becomes `s2r://panorama/images/icons/mark_png.vtex`. The compiler refuses any other URL and reports its line. `decompile`, `kv3` and `texture` take `--archive` to read `FILE` from inside an archive, including the game's split `game/citadel/pak01_dir.vpk`:
+`panorama compile` copies every other file in `DIR` into the archive unchanged, so compiled resources such as images go in beside the layouts. `-o` writes to another archive, or to a directory. A style sheet's `url()` can point to an image or another sheet in the game's files, written as `s2r://`, `file://{images}/` or `file://{resources}/`. The compiler rewrites it to the path of the resource the game loads: `file://{images}/icons/mark.png` becomes `s2r://panorama/images/icons/mark_png.vtex`. For each image a sheet names, the compiler also records the image's size, which the game uses wherever that image is drawn. It reads the size from the compiled image in `DIR`, or from your Deadlock install for one of the game's own images. Without an install, the sheet records no size for a game image, and the game reads it from the image when it loads. The compiler refuses any other URL and reports its line. `decompile`, `kv3` and `texture` take `--archive` to read `FILE` from inside an archive, including the game's split `game/citadel/pak01_dir.vpk`:
 
 ```sh
 modlock panorama decompile --archive pak01_dir.vpk panorama/layout/hud.vxml_c

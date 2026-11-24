@@ -166,6 +166,80 @@ _Definition_File: dict[Any, Any] = {
 }
 
 
+# ControllerStream is the state of the stream that brings one player's
+# controllers to the host, as a mod reads it.
+type ControllerStream = Literal["none", "live", "unfocused", "stale"]
+_ControllerStream: dict[Any, Any] = {
+    1: "none",
+    "none": 1,
+    2: "live",
+    "live": 2,
+    3: "unfocused",
+    "unfocused": 3,
+    4: "stale",
+    "stale": 4,
+}
+
+
+# GamepadButton names one button of the gamepad layout, by position as SDL
+# names them: South is A on an Xbox controller and Cross on a PlayStation one.
+type GamepadButton = Literal[
+    "south",
+    "east",
+    "west",
+    "north",
+    "back",
+    "guide",
+    "start",
+    "left_stick",
+    "right_stick",
+    "left_shoulder",
+    "right_shoulder",
+    "dpad_up",
+    "dpad_down",
+    "dpad_left",
+    "dpad_right",
+    "misc",
+    "touchpad",
+]
+_GamepadButton: dict[Any, Any] = {
+    1: "south",
+    "south": 1,
+    2: "east",
+    "east": 2,
+    3: "west",
+    "west": 3,
+    4: "north",
+    "north": 4,
+    5: "back",
+    "back": 5,
+    6: "guide",
+    "guide": 6,
+    7: "start",
+    "start": 7,
+    8: "left_stick",
+    "left_stick": 8,
+    9: "right_stick",
+    "right_stick": 9,
+    10: "left_shoulder",
+    "left_shoulder": 10,
+    11: "right_shoulder",
+    "right_shoulder": 11,
+    12: "dpad_up",
+    "dpad_up": 12,
+    13: "dpad_down",
+    "dpad_down": 13,
+    14: "dpad_left",
+    "dpad_left": 14,
+    15: "dpad_right",
+    "dpad_right": 15,
+    16: "misc",
+    "misc": 16,
+    17: "touchpad",
+    "touchpad": 17,
+}
+
+
 # MovementAction is a movement fact the game announced for a hero.
 type MovementAction = Literal[
     "landed",
@@ -886,6 +960,20 @@ _Align: dict[Any, Any] = {
 }
 
 
+# PingKind is how a player pinged.
+type PingKind = Literal["map", "wheel", "quick_response", "ability"]
+_PingKind: dict[Any, Any] = {
+    0: "map",
+    "map": 0,
+    1: "wheel",
+    "wheel": 1,
+    2: "quick_response",
+    "quick_response": 2,
+    3: "ability",
+    "ability": 3,
+}
+
+
 # ServiceFailure says why a service call ended without an answer.
 type ServiceFailure = Literal["none", "refused", "timeout", "unavailable"]
 _ServiceFailure: dict[Any, Any] = {
@@ -1508,6 +1596,103 @@ class DefinitionFieldOptions:
 
 
 @dataclasses.dataclass(slots=True, kw_only=True)
+class ControllerInfo:
+    """ControllerInfo describes one device a client reads."""
+
+    # id identifies the device within its stream for as long as it stays
+    # attached. A device plugged in again gets a new id.
+    id: int = 0
+    # name is the device's name, such as "Xbox Series X Controller".
+    name: str = ""
+    # guid is SDL's joystick GUID in hexadecimal, which identifies the model
+    # and the way it is attached.
+    guid: str = ""
+    # vendor and product are the USB vendor and product IDs, or zero when the
+    # device does not report them.
+    vendor: int = 0
+    product: int = 0
+    # axes, buttons and hats count the device's raw inputs, which State's
+    # lists follow.
+    axes: int = 0
+    buttons: int = 0
+    hats: int = 0
+    # gamepad is true when SDL knows the device's gamepad layout, so State
+    # carries the gamepad layer.
+    gamepad: bool = False
+
+
+@dataclasses.dataclass(slots=True, kw_only=True)
+class Gamepad:
+    """Gamepad is a device's gamepad layer, with named sticks, triggers and
+    buttons, for a device whose layout SDL knows.
+    """
+
+    # left_x, left_y, right_x and right_y are the sticks, from -1 to 1, with x
+    # positive to the right and y positive down, as SDL reports them.
+    left_x: float = 0.0
+    left_y: float = 0.0
+    right_x: float = 0.0
+    right_y: float = 0.0
+    # left_trigger and right_trigger run from 0 at rest to 1 fully pulled.
+    left_trigger: float = 0.0
+    right_trigger: float = 0.0
+    # held lists the buttons held now.
+    held: list[GamepadButton] = dataclasses.field(default_factory=lambda: list[GamepadButton]())
+    # pressed and released list the buttons pressed and released since the
+    # previous state, once for each press, so a tap shorter than a server frame
+    # is listed in both.
+    pressed: list[GamepadButton] = dataclasses.field(default_factory=lambda: list[GamepadButton]())
+    released: list[GamepadButton] = dataclasses.field(default_factory=lambda: list[GamepadButton]())
+
+
+@dataclasses.dataclass(slots=True, kw_only=True)
+class ControllerState:
+    """ControllerState is one device's inputs, the raw joystick layer always and
+    the gamepad layer when SDL knows the device.
+    """
+
+    # id is the device's id in ControllerInfo.
+    id: int = 0
+    # axes holds each raw axis from -1 to 1, in the device's order. A radio
+    # transmitter's channels are its axes.
+    axes: list[float] = dataclasses.field(default_factory=lambda: list[float]())
+    # buttons holds whether each raw button is held, in the device's order.
+    buttons: list[bool] = dataclasses.field(default_factory=lambda: list[bool]())
+    # hats holds each hat's position as SDL's mask: 1 up, 2 right, 4 down and
+    # 8 left, combined on a diagonal, and 0 centered.
+    hats: list[int] = dataclasses.field(default_factory=lambda: list[int]())
+    # pressed and released list the raw buttons, by index, pressed and
+    # released since the previous state, once for each press.
+    pressed: list[int] = dataclasses.field(default_factory=lambda: list[int]())
+    released: list[int] = dataclasses.field(default_factory=lambda: list[int]())
+    # gamepad is the gamepad layer, when the device has one.
+    gamepad: Gamepad
+
+
+@dataclasses.dataclass(slots=True, kw_only=True)
+class Controller:
+    """Controller is one device as a mod reads it."""
+
+    # info describes the device.
+    info: ControllerInfo
+    # state is its inputs now, with the presses and releases since the mod's
+    # previous frame.
+    state: ControllerState
+
+
+@dataclasses.dataclass(slots=True, kw_only=True)
+class PlayerControllers:
+    """PlayerControllers is one watched player's controllers in a frame."""
+
+    # player is the player's slot.
+    player: Player
+    # stream is the state of the stream that brings them.
+    stream: ControllerStream | None = None
+    # controllers lists the player's devices, empty while stream is none.
+    controllers: list[Controller] = dataclasses.field(default_factory=lambda: list[Controller]())
+
+
+@dataclasses.dataclass(slots=True, kw_only=True)
 class MovementSample:
     """MovementSample is one watched hero's movement on one tick, as the game keeps
     it. A hero whose position, velocity or ground the game does not provide has
@@ -1866,7 +2051,9 @@ class RestoredEvent:
 
 @dataclasses.dataclass(slots=True, kw_only=True)
 class PlayersChangedEvent:
-    """PlayersChangedEvent holds every occupied player slot, as Players lists them."""
+    """PlayersChangedEvent holds every player slot with a seat, connected or
+    away, as Players lists them.
+    """
 
     players: list[Connection] = dataclasses.field(default_factory=lambda: list[Connection]())
 
@@ -1879,6 +2066,28 @@ class PlayerJoinedEvent:
     """
 
     # connection is the player as Players lists them.
+    connection: Connection
+
+
+@dataclasses.dataclass(slots=True, kw_only=True)
+class PlayerAwayEvent:
+    """PlayerAwayEvent reports a joined player whose client disconnected while the
+    server holds their seat. Their controller and hero stay in the game, and the
+    player may return to them.
+    """
+
+    # connection is the player as Players lists them, away.
+    connection: Connection
+
+
+@dataclasses.dataclass(slots=True, kw_only=True)
+class PlayerReturnedEvent:
+    """PlayerReturnedEvent reports an away player who reconnected to their seat
+    and finished joining again. The seat, its generation and its hero are the
+    ones they left.
+    """
+
+    # connection is the player as Players lists them, ready again.
     connection: Connection
 
 
@@ -1912,14 +2121,28 @@ class Connection:
     # bot is true for a bot player.
     bot: bool = False
     # ready is true once a human has finished joining; bots are always ready.
+    # An away player is not ready.
     ready: bool = False
-    # generation changes each time a new connection takes the slot.
+    # generation identifies the seat: it changes when a new player or bot takes
+    # the slot, and stays the same when an away player returns.
     generation: int = 0
     # roles are what the player is to the running mods, as the program that
     # runs the host grants them. A role decides what a mod shows, such as an
     # unfinished feature for its testers; the platform that keeps a mod's
     # shared data checks its own writers.
     roles: list[ModRole] = dataclasses.field(default_factory=lambda: list[ModRole]())
+    # away is true while the player's client is disconnected and the server
+    # holds their seat for them to return.
+    away: bool = False
+
+
+@dataclasses.dataclass(slots=True, kw_only=True)
+class PlayerPawn:
+    """PlayerPawn is one player's pawn."""
+
+    # player is the player's server slot.
+    player: Player
+    pawn: Pawn
 
 
 @dataclasses.dataclass(slots=True, kw_only=True)
@@ -2282,6 +2505,7 @@ class StartResult:
     # chat asks for a chat event for each chat line.
     chat: bool = False
     # joins asks for a PlayerJoined event as each player the mod serves joins,
+    # PlayerAway and PlayerReturned events as they disconnect and come back,
     # and a PlayerLeft event as each leaves.
     joins: bool = False
     # casts asks for an AbilityCast event after each ability the game
@@ -2303,6 +2527,8 @@ class StartResult:
     melees: bool = False
     # parries asks for a Parried event after each parry that catches a swing.
     parries: bool = False
+    # pings asks for a Ping event before each ping a player sends.
+    pings: bool = False
 
 
 @dataclasses.dataclass(slots=True, kw_only=True)
@@ -2320,6 +2546,9 @@ class FrameEvent:
     # movement. A kind it lacks, such as on a game build whose completion it
     # cannot find, is unknown rather than absent from the samples.
     interactions: list[InteractionKind] = dataclasses.field(default_factory=lambda: list[InteractionKind]())
+    # controllers holds each watched player's controllers in every frame, with
+    # the presses and releases since the mod's previous frame.
+    controllers: list[PlayerControllers] = dataclasses.field(default_factory=lambda: list[PlayerControllers]())
 
 
 @dataclasses.dataclass(slots=True, kw_only=True)
@@ -2351,6 +2580,36 @@ class ChatEvent:
     # lane is the CMsgLaneColor of the lane the line pings: 1 yellow, 3
     # green, 4 blue, 6 purple, or 0 for none.
     lane: int = 0
+
+
+@dataclasses.dataclass(slots=True, kw_only=True)
+class PingEvent:
+    """PingEvent carries one ping a player sent, before anyone sees it."""
+
+    # player is the player who pinged.
+    player: Player
+    # kind is how they pinged.
+    kind: PingKind | None = None
+    # option is the comms wheel line for a wheel ping, the
+    # m_unPingWheelOptionID of the game's scripts/ping_wheel_messages.vdata,
+    # and zero for another kind.
+    option: int = 0
+    # concept is the voice line the ping speaks, a CitadelConcept_t value, or
+    # zero for none.
+    concept: int = 0
+
+
+@dataclasses.dataclass(slots=True, kw_only=True)
+class PingResult:
+    """PingResult answers a Ping event."""
+
+    # block drops the ping for every player, the sender included: its marker,
+    # sound, voice line and chat line.
+    block: bool = False
+    # mute_voice lists the players, by slot, who get a ping that is not blocked
+    # without its voice line: they still see its marker and hear its sound.
+    # The other recipients get it whole.
+    mute_voice: list[int] = dataclasses.field(default_factory=lambda: list[int]())
 
 
 @dataclasses.dataclass(slots=True, kw_only=True)
@@ -2676,7 +2935,7 @@ class Player:
         hero with no expiry, giving it back whenever the game removes it or the
         hero returns. Every hero that gains the modifier from the same ability
         keeps it until the hold ends. Releasing leaves the hero's current
-        modifier until it dies.
+        modifier until it dies; the mod stopping removes it.
         """
         return _call("HoldModifier", "HoldModifierRequest", {"player": self, "modifier": modifier, "active": active}) is not None
 
@@ -2847,6 +3106,14 @@ class Player:
         event on a new tick, or removes it.
         """
         return _call("WatchMovement", "WatchMovementRequest", {"player": self, "watch": watch}) is not None
+
+    def watch_controllers(self, watch: bool) -> bool:
+        """watch_controllers adds a player's controllers to the controller lists of
+        each Frame event, or removes them. The player's client reads the devices
+        only while some mod watches them, and until it answers the player is
+        listed with no stream.
+        """
+        return _call("WatchControllers", "WatchControllersRequest", {"player": self, "watch": watch}) is not None
 
     def connection(self: Player) -> Connection | None:
         """connection returns the player's connection: their name, Steam ID,
@@ -3871,6 +4138,13 @@ _SCHEMA: wire.Schema = {
             wire.Field(4, "proof", "string"),
         ],
     ),
+    "Teammate": (
+        None,
+        [
+            wire.Field(1, "player", "int32", cls=Player, key="slot"),
+            wire.Field(2, "connection", "message", optional=True, message="ScoreConnection"),
+        ],
+    ),
     "ScoreReport": (
         None,
         [
@@ -3883,6 +4157,7 @@ _SCHEMA: wire.Schema = {
             wire.Field(7, "earned_at_unix_millis", "int64"),
             wire.Field(8, "evidence", "string"),
             wire.Field(9, "connection", "message", optional=True, message="ScoreConnection"),
+            wire.Field(10, "teammates", "message", repeated=True, message="Teammate"),
         ],
     ),
     "ScoreReport_PartitionEntry": (
@@ -3929,6 +4204,7 @@ _SCHEMA: wire.Schema = {
             wire.Field(5, "limit", "uint32"),
             wire.Field(6, "player", "int32", optional=True, cls=Player, key="slot"),
             wire.Field(7, "connection", "message", optional=True, message="ScoreConnection"),
+            wire.Field(8, "teammates", "message", repeated=True, message="Teammate"),
         ],
     ),
     "BoardQuery_PartitionEntry": (
@@ -3954,6 +4230,14 @@ _SCHEMA: wire.Schema = {
             wire.Field(4, "value", "int64"),
             wire.Field(5, "tiebreak", "int64"),
             wire.Field(6, "count", "uint32"),
+            wire.Field(7, "members", "message", repeated=True, message="Member"),
+        ],
+    ),
+    "Member": (
+        None,
+        [
+            wire.Field(1, "steam_id", "uint64"),
+            wire.Field(2, "name", "string"),
         ],
     ),
     "SettingChangedEvent": (
@@ -3997,6 +4281,68 @@ _SCHEMA: wire.Schema = {
         None,
         [
             wire.Field(1, "value", "float"),
+        ],
+    ),
+    "ControllerInfo": (
+        ControllerInfo,
+        [
+            wire.Field(1, "id", "uint32"),
+            wire.Field(2, "name", "string"),
+            wire.Field(3, "guid", "string"),
+            wire.Field(4, "vendor", "uint32"),
+            wire.Field(5, "product", "uint32"),
+            wire.Field(6, "axes", "uint32"),
+            wire.Field(7, "buttons", "uint32"),
+            wire.Field(8, "hats", "uint32"),
+            wire.Field(9, "gamepad", "bool"),
+        ],
+    ),
+    "Gamepad": (
+        Gamepad,
+        [
+            wire.Field(1, "left_x", "float"),
+            wire.Field(2, "left_y", "float"),
+            wire.Field(3, "right_x", "float"),
+            wire.Field(4, "right_y", "float"),
+            wire.Field(5, "left_trigger", "float"),
+            wire.Field(6, "right_trigger", "float"),
+            wire.Field(7, "held", "enum", repeated=True, enum=_GamepadButton),
+            wire.Field(8, "pressed", "enum", repeated=True, enum=_GamepadButton),
+            wire.Field(9, "released", "enum", repeated=True, enum=_GamepadButton),
+        ],
+    ),
+    "ControllerState": (
+        ControllerState,
+        [
+            wire.Field(1, "id", "uint32"),
+            wire.Field(2, "axes", "float", repeated=True),
+            wire.Field(3, "buttons", "bool", repeated=True),
+            wire.Field(4, "hats", "uint32", repeated=True),
+            wire.Field(5, "pressed", "uint32", repeated=True),
+            wire.Field(6, "released", "uint32", repeated=True),
+            wire.Field(7, "gamepad", "message", message="Gamepad"),
+        ],
+    ),
+    "Controller": (
+        Controller,
+        [
+            wire.Field(1, "info", "message", message="ControllerInfo"),
+            wire.Field(2, "state", "message", message="ControllerState"),
+        ],
+    ),
+    "PlayerControllers": (
+        PlayerControllers,
+        [
+            wire.Field(1, "player", "int32", cls=Player, key="slot"),
+            wire.Field(2, "stream", "enum", enum=_ControllerStream),
+            wire.Field(3, "controllers", "message", repeated=True, message="Controller"),
+        ],
+    ),
+    "WatchControllersRequest": (
+        None,
+        [
+            wire.Field(1, "player", "int32", cls=Player, key="slot"),
+            wire.Field(2, "watch", "bool"),
         ],
     ),
     "MovementSample": (
@@ -4342,6 +4688,18 @@ _SCHEMA: wire.Schema = {
             wire.Field(1, "connection", "message", message="Connection"),
         ],
     ),
+    "PlayerAwayEvent": (
+        PlayerAwayEvent,
+        [
+            wire.Field(1, "connection", "message", message="Connection"),
+        ],
+    ),
+    "PlayerReturnedEvent": (
+        PlayerReturnedEvent,
+        [
+            wire.Field(1, "connection", "message", message="Connection"),
+        ],
+    ),
     "PlayerLeftEvent": (
         PlayerLeftEvent,
         [
@@ -4372,12 +4730,26 @@ _SCHEMA: wire.Schema = {
             wire.Field(5, "ready", "bool"),
             wire.Field(6, "generation", "uint32"),
             wire.Field(7, "roles", "enum", repeated=True, enum=_ModRole),
+            wire.Field(8, "away", "bool"),
         ],
     ),
     "PawnResponse": (
         None,
         [
             wire.Field(1, "pawn", "message", optional=True, message="Pawn"),
+        ],
+    ),
+    "PawnsResponse": (
+        None,
+        [
+            wire.Field(1, "pawns", "message", repeated=True, message="PlayerPawn"),
+        ],
+    ),
+    "PlayerPawn": (
+        PlayerPawn,
+        [
+            wire.Field(1, "player", "int32", cls=Player, key="slot"),
+            wire.Field(2, "pawn", "message", message="Pawn"),
         ],
     ),
     "Pawn": (
@@ -5009,6 +5381,7 @@ _SCHEMA: wire.Schema = {
             wire.Field(10, "levels", "bool"),
             wire.Field(11, "melees", "bool"),
             wire.Field(12, "parries", "bool"),
+            wire.Field(13, "pings", "bool"),
         ],
     ),
     "FrameEvent": (
@@ -5018,6 +5391,7 @@ _SCHEMA: wire.Schema = {
             wire.Field(2, "time_seconds", "double"),
             wire.Field(3, "movement", "message", repeated=True, message="MovementSample"),
             wire.Field(4, "interactions", "enum", repeated=True, enum=_InteractionKind),
+            wire.Field(5, "controllers", "message", repeated=True, message="PlayerControllers"),
         ],
     ),
     "CommandEvent": (
@@ -5034,6 +5408,22 @@ _SCHEMA: wire.Schema = {
             wire.Field(2, "text", "string"),
             wire.Field(3, "all", "bool"),
             wire.Field(4, "lane", "int32"),
+        ],
+    ),
+    "PingEvent": (
+        PingEvent,
+        [
+            wire.Field(1, "player", "int32", cls=Player, key="slot"),
+            wire.Field(2, "kind", "enum", enum=_PingKind),
+            wire.Field(3, "option", "uint32"),
+            wire.Field(4, "concept", "int32"),
+        ],
+    ),
+    "PingResult": (
+        PingResult,
+        [
+            wire.Field(1, "block", "bool"),
+            wire.Field(2, "mute_voice", "int32", repeated=True),
         ],
     ),
     "CommandResult": (
@@ -5141,6 +5531,18 @@ def precache(options: PrecacheOptions) -> bool:
     hero whose abilities ReplaceAbility gives, with their particles.
     """
     return _call("Precache", "PrecacheOptions", options) is not None
+
+
+def pawns() -> list[PlayerPawn]:
+    """pawns returns every player's pawn this frame in one reply, in slot order,
+    each as Pawn returns it: a mode that reads every hero each frame makes
+    one call instead of one per player. A slot Pawn answers nothing for is
+    left out.
+    """
+    response = _call("Pawns", "Empty", {}, "PawnsResponse")
+    if response is None:
+        return []
+    return response["pawns"]
 
 
 def read_file(path: str) -> str | None:
@@ -5729,7 +6131,8 @@ def hold_entity_modifier(entity: int, modifier: str, active: bool | None = None)
     """hold_entity_modifier keeps a modifier, named as GiveModifier names it, on a
     live entity with no expiry, giving it back whenever the game removes it
     while the entity lives. The hold ends with the entity or when active is
-    false.
+    false. Releasing leaves the entity's current modifier; the mod stopping
+    removes it.
     """
     return _call("HoldEntityModifier", "HoldEntityModifierRequest", {"entity": entity, "modifier": modifier, "active": active}) is not None
 
@@ -5749,6 +6152,7 @@ _EVENTS: dict[str, tuple[str, str, str]] = {
     "Frame": ("FrameEvent", "Empty", "frame"),
     "Command": ("CommandEvent", "CommandResult", "command"),
     "Chat": ("ChatEvent", "Empty", "chat"),
+    "Ping": ("PingEvent", "PingResult", "ping"),
     "World": ("WorldEvent", "Empty", "world"),
     "UiPress": ("UiPressEvent", "Empty", "ui_press"),
     "UiInput": ("UiInputEvent", "Empty", "ui_input"),
@@ -5771,6 +6175,8 @@ _EVENTS: dict[str, tuple[str, str, str]] = {
     "Landed": ("LandedEvent", "Empty", "landed"),
     "SettingChanged": ("SettingChangedEvent", "Empty", "setting_changed"),
     "PlayerJoined": ("PlayerJoinedEvent", "Empty", "player_joined"),
+    "PlayerAway": ("PlayerAwayEvent", "Empty", "player_away"),
+    "PlayerReturned": ("PlayerReturnedEvent", "Empty", "player_returned"),
     "PlayerLeft": ("PlayerLeftEvent", "Empty", "player_left"),
     "PlayersChanged": ("PlayersChangedEvent", "Empty", "players_changed"),
 }
@@ -5815,6 +6221,7 @@ import math
 import random
 import sys
 import traceback
+from collections.abc import Sequence
 
 from .heroes import HEROES as HEROES
 from .heroes import Hero as Hero
@@ -5850,6 +6257,11 @@ class Buttons(enum.IntFlag):
     ABILITY3 = 1 << 35
     # ULTIMATE is the hero's ultimate ability key, the fourth.
     ULTIMATE = 1 << 36
+    # ITEM1 to ITEM4 are the hero's four active item keys.
+    ITEM1 = 1 << 37
+    ITEM2 = 1 << 38
+    ITEM3 = 1 << 39
+    ITEM4 = 1 << 40
     # PARRY is the melee parry button.
     PARRY = 1 << 42
     # SPEC_NEXT to SPEC_TOGGLE_TEAM are the buttons a player's client sends in
@@ -5902,12 +6314,15 @@ _frames: list[Callable[[FrameEvent], object]] = []
 _chats: list[Callable[[ChatEvent], object]] = []
 _joins: list[Callable[[PlayerJoinedEvent], object]] = []
 _leaves: list[Callable[[PlayerLeftEvent], object]] = []
+_aways: list[Callable[[PlayerAwayEvent], object]] = []
+_returns: list[Callable[[PlayerReturnedEvent], object]] = []
 _worlds: list[Callable[[str], object]] = []
 _inputs: list[Callable[[Player, Buttons, Buttons], object]] = []
 _restoreds: list[Callable[[Player, str | None], object]] = []
 _npcs_restoreds: list[Callable[[str | None], object]] = []
 _damages: list[Callable[[DamageEvent], DamageResult | None]] = []
 _damageds: list[Callable[[DamagedEvent], object]] = []
+_pings: list[Callable[[PingEvent], PingResult | None]] = []
 _kills: list[Callable[[KillEvent], object]] = []
 _ability_casts: list[Callable[[AbilityCastEvent], object]] = []
 _heals: list[Callable[[HealEvent], object]] = []
@@ -6366,8 +6781,18 @@ class MatchPlace:
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class BoardMember:
+    """BoardMember is one player of a team's row."""
+
+    steam_id: int
+    name: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class BoardRow:
-    """BoardRow is one player's place on a board."""
+    """BoardRow is one player's place on a board, or a team's on a board that
+    ranks teams: its members then, ordered by SteamID64, with steam_id and
+    name the first member's."""
 
     rank: int
     steam_id: int
@@ -6375,6 +6800,7 @@ class BoardRow:
     value: int
     tiebreak: int
     count: int
+    members: list[BoardMember]
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -6398,8 +6824,13 @@ def report_score(
     key: str | None = None,
     earned_at: float = 0,
     evidence: str | None = None,
+    teammates: Sequence[ScorePlayer] = (),
 ) -> None:
-    """report_score reports an enrolled player's result and answers on a later frame."""
+    """report_score reports an enrolled player's result and answers on a later frame.
+
+    teammates are the scoring player's teammates on a board that ranks teams,
+    each enrolled with bind_score_player: the board's team size less one.
+    """
     report = wire.encode(
         _SCHEMA,
         "ScoreReport",
@@ -6413,6 +6844,10 @@ def report_score(
             "key": key,
             "earned_at_unix_millis": _int64(earned_at),
             "evidence": evidence,
+            "teammates": [
+                {"player": Player(teammate.slot), "connection": dataclasses.asdict(teammate)}
+                for teammate in teammates
+            ],
         },
     )
     call_service_later(_SCORES, "Report", report, lambda _, err, __: done(err))
@@ -6457,8 +6892,13 @@ def read_board(
     offset: int = 0,
     limit: int = 0,
     player: Connection | None = None,
+    teammates: Sequence[Connection] = (),
 ) -> None:
-    """read_board reads a page and the optional connected viewer's row on a later frame."""
+    """read_board reads a page and the optional connected viewer's row on a later frame.
+
+    teammates name the player's teammates on a board that ranks teams, so the
+    page's player row is their team's; each is in the game now.
+    """
     query = wire.encode(
         _SCHEMA,
         "BoardQuery",
@@ -6466,6 +6906,10 @@ def read_board(
             "board": board, "partition": partition, "window": window, "offset": offset, "limit": limit,
             "player": player.player if player is not None else None,
             "connection": _score_identity(player) if player is not None else None,
+            "teammates": [
+                {"player": teammate.player, "connection": _score_identity(teammate)}
+                for teammate in teammates
+            ],
         },
     )
 
@@ -6477,13 +6921,19 @@ def read_board(
         standing = page["player"]
         done(
             BoardPage(
-                rows=[BoardRow(**row) for row in page["rows"]],
-                player=BoardRow(**standing) if standing is not None else None,
+                rows=[_board_row(row) for row in page["rows"]],
+                player=_board_row(standing) if standing is not None else None,
             ),
             None,
         )
 
     call_service_later(_SCORES, "Read", query, finish)
+
+
+def _board_row(standing: dict[str, Any]) -> BoardRow:
+    """_board_row converts a decoded standing to its row."""
+    members = [BoardMember(**member) for member in standing.pop("members")]
+    return BoardRow(**standing, members=members)
 
 
 def _int64(value: float) -> int:
@@ -6526,7 +6976,7 @@ def command[F: Callable[[Player, str], object]](name: str) -> Callable[[F], F]:
 
 def on_start[F: Callable[[list[str]], object]](handler: F) -> F:
     """on_start calls handler once when the server starts the mod, with the
-    arguments that follow -- on the modlock-host command line.
+    words after -- on the modlock dev or play command line.
 
     Annotate the handler's parameters, since a checker and an editor's
     completion read their types from there:
@@ -6769,6 +7219,24 @@ def on_damage[F: Callable[[DamageEvent], DamageResult | None]](handler: F) -> F:
     return handler
 
 
+def on_ping[F: Callable[[PingEvent], PingResult | None]](handler: F) -> F:
+    """on_ping calls handler with each ping a player sends, from the comms
+    wheel, a quick ping key, the map or an ability, before anyone sees it,
+    so it can block the ping or mute its voice line. A blocked ping reaches
+    nobody, the sender included; the players a handler lists in mute_voice,
+    by slot, get it without its voice line. The handler runs inside the
+    server's ping, so it decides at once and defers other work to a frame.
+
+    Annotate the handler's parameters, since a checker and an editor's
+    completion read their types from there:
+
+        @modlock.on_ping
+        def ping(ping: modlock.PingEvent) -> modlock.PingResult | None: ...
+    """
+    _pings.append(handler)
+    return handler
+
+
 def on_chat[F: Callable[[ChatEvent], object]](handler: F) -> F:
     """on_chat calls handler with each chat line a player writes, commands
     included, on the next server frame.
@@ -6798,11 +7266,41 @@ def on_player_join[F: Callable[[PlayerJoinedEvent], object]](handler: F) -> F:
     return handler
 
 
+def on_player_away[F: Callable[[PlayerAwayEvent], object]](handler: F) -> F:
+    """on_player_away calls handler once each time a joined human's client
+    disconnects while the server holds their seat. They have not left: their
+    hero and controller stay in the game, and on_player_return follows if
+    they come back, so keep their seat as it stands rather than clear it.
+
+        @modlock.on_player_away
+        def away(away: modlock.PlayerAwayEvent) -> None: ...
+    """
+    _aways.append(handler)
+    return handler
+
+
+def on_player_return[F: Callable[[PlayerReturnedEvent], object]](handler: F) -> F:
+    """on_player_return calls handler once each time an away player
+    reconnects to their seat and finishes joining again, with the same
+    Player, generation and hero they left.
+
+        @modlock.on_player_return
+        def back(returned: modlock.PlayerReturnedEvent) -> None: ...
+    """
+    _returns.append(handler)
+    return handler
+
+
 def on_player_leave[F: Callable[[PlayerLeftEvent], object]](handler: F) -> F:
     """on_player_leave calls handler once for each joined player who leaves
-    the mod, with the reason the server dropped them when it gave one. A
-    player who disconnects still has their slot and hero during the call. A
-    player the mod stops serving leaves too, with disconnected false.
+    the mod, with the reason the server dropped them when it gave one. A seat
+    ends, and its player leaves, when a bot is removed, a human is kicked or
+    released by the program that runs the host, or a human stays away past
+    the game's limit; a human who only disconnects is away first. The slot
+    and hero still read during the call, and afterwards Modlock kills the
+    hero, keeps it down and takes the controller off its team, so the mod
+    need not clear them. A player the mod stops serving leaves too, with
+    disconnected false.
 
     Annotate the handler's parameters, since a checker and an editor's
     completion read their types from there:
@@ -7018,13 +7516,14 @@ def _start(event: StartEvent) -> StartResult:
         damage=bool(_damages),
         damaged=bool(_damageds),
         chat=bool(_chats),
-        joins=bool(_joins or _leaves),
+        joins=bool(_joins or _leaves or _aways or _returns),
         casts=bool(_ability_casts),
         kills=bool(_kills),
         heals=bool(_heals),
         levels=bool(_levels),
         melees=bool(_melees),
         parries=bool(_parries),
+        pings=bool(_pings),
         modifier_events=list(
             _modifier_events.keys() | ({_RESPAWNED} if _spawns else set())
         ),
@@ -7092,6 +7591,20 @@ def _chat(event: ChatEvent) -> None:
             handler(event)
 
     after(0, run)
+
+
+def _ping(event: PingEvent) -> PingResult:
+    # The first handler that blocks the ping ends its dispatch; the others
+    # add the players they mute its voice line for.
+    mute_voice: dict[int, None] = {}
+    for handler in _pings:
+        result = handler(event)
+        if result is None:
+            continue
+        if result.block:
+            return PingResult(block=True)
+        mute_voice.update(dict.fromkeys(result.mute_voice))
+    return PingResult(block=False, mute_voice=list(mute_voice))
 
 
 def _world(event: WorldEvent) -> None:
@@ -7296,6 +7809,16 @@ def _player_joined(event: PlayerJoinedEvent) -> None:
         handler(event)
 
 
+def _player_away(event: PlayerAwayEvent) -> None:
+    for handler in _aways:
+        handler(event)
+
+
+def _player_returned(event: PlayerReturnedEvent) -> None:
+    for handler in _returns:
+        handler(event)
+
+
 def _player_left(event: PlayerLeftEvent) -> None:
     for handler in _leaves:
         handler(event)
@@ -7307,6 +7830,7 @@ _HANDLERS: dict[str, Callable[[Any], Any]] = {
     "frame": _frame,
     "command": _command,
     "chat": _chat,
+    "ping": _ping,
     "world": _world,
     "ui_press": _ui_press,
     "ui_input": _ui_input,
@@ -7330,6 +7854,8 @@ _HANDLERS: dict[str, Callable[[Any], Any]] = {
     "setting_changed": _setting_changed,
     "players_changed": _players_changed,
     "player_joined": _player_joined,
+    "player_away": _player_away,
+    "player_returned": _player_returned,
     "player_left": _player_left,
 }
 

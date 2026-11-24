@@ -23,6 +23,7 @@ Game::Game(GameServices& services, EngineHost* engine)
 
 Game::~Game() {
   services_.games_.erase(this);
+  services_.Controllers().Release(this);
   if (auto steps = services_.Steps(); !steps) {
     std::cerr << "mod movement: " << steps.error() << '\n';
   }
@@ -224,10 +225,11 @@ void Game::WorldEnding() {
 }
 
 void Game::Leave(int32_t slot) {
-  // Forget the slot's movement, input and visibility.
+  // Forget the slot's movement, controllers, input and visibility.
   seat_failed_.erase(slot);
   frozen_.erase(slot);
   movers_.erase(slot);
+  services_.Controllers().Watch(this, slot, false);
   steers_.erase(slot);
   drives_.erase(slot);
 
@@ -281,9 +283,10 @@ void Game::Clear() {
     }
   }
 
-  // Stop moving and steering heroes.
+  // Stop moving and steering heroes and watching controllers.
   frozen_.clear();
   movers_.clear();
+  services_.Controllers().Release(this);
   steers_.clear();
   drives_.clear();
 
@@ -298,6 +301,25 @@ void Game::Clear() {
   free_for_all_ = false;
   team_seating_ = false;
   ReleaseFreeForAll();
+  // Remove active held modifiers from live entities when the mod stops, so
+  // infinite modifiers (such as camera-override modifiers) do not outlive it.
+  if (world_) {
+    auto modifier_name = [](std::string_view key) -> std::string_view {
+      const auto slash = key.find('/');
+      return slash == std::string_view::npos ? key : key.substr(slash + 1);
+    };
+    for (const auto& [slot, key] : held_modifiers_) {
+      if (const auto sample = observer_.Observe(slot); sample && sample->pawn_handle) {
+        static_cast<void>(world_->FireInput(sample->pawn_handle, "RemoveModifier",
+                                            gameinterop::EntityValue{modifier_name(key)},
+                                            std::nullopt));
+      }
+    }
+    for (const auto& [entity, key] : held_entity_modifiers_) {
+      static_cast<void>(world_->FireInput(
+          entity, "RemoveModifier", gameinterop::EntityValue{modifier_name(key)}, std::nullopt));
+    }
+  }
   ReleaseModifiers();
 
   // Return every ability's cooldown lengths and most charges to the game's
@@ -415,13 +437,13 @@ std::expected<void, std::string> Game::Announce(const effects::AnnounceRequest& 
 std::expected<players::PlayersResponse, std::string> Game::Players() {
   players::PlayersResponse players;
   for (int32_t slot = 0; slot < gameinterop::kMaxPlayerSlots; ++slot) {
-    // List each occupied slot.
+    // List each slot with a seat, connected or away.
     const auto state = gameinterop::ConnectionTracker::StateForSlot(slot);
-    if (!state.occupied) {
+    if (!state.occupied && !state.away) {
       continue;
     }
 
-    // With its identity and readiness.
+    // With its identity, readiness and presence.
     auto* player = players.add_players();
     player->set_player(slot);
     player->set_steam_id(state.is_bot ? 0 : state.xuid);
@@ -429,6 +451,7 @@ std::expected<players::PlayersResponse, std::string> Game::Players() {
     player->set_bot(state.is_bot);
     player->set_ready(state.is_bot || state.fully_connected);
     player->set_generation(state.generation);
+    player->set_away(state.away);
   }
   return players;
 }
@@ -439,75 +462,96 @@ std::expected<players::PawnResponse, std::string> Game::Pawn(
   // pawn.
   players::PawnResponse response;
   const auto sample = Live(request.player());
-  if (!sample) {
-    return response;
+  if (sample) {
+    FillPawn(request.player(), *sample, response.mutable_pawn());
   }
+  return response;
+}
 
+std::expected<players::PawnsResponse, std::string> Game::Pawns() {
+  // One sample per occupied slot with a live hero, in slot order: the same
+  // pawn Pawn answers for each, in one reply.
+  players::PawnsResponse response;
+  for (int32_t slot = 0; slot < gameinterop::kMaxPlayerSlots; ++slot) {
+    if (!gameinterop::ConnectionTracker::StateForSlot(slot).occupied) {
+      continue;
+    }
+    const auto sample = Live(slot);
+    if (!sample) {
+      continue;
+    }
+    auto* entry = response.add_pawns();
+    entry->set_player(slot);
+    FillPawn(slot, *sample, entry->mutable_pawn());
+  }
+  return response;
+}
+
+void Game::FillPawn(int32_t slot, const gameinterop::PawnObserver::Sample& sample,
+                    players::Pawn* pawn) {
   // Copy the pawn's identity and health.
-  auto* pawn = response.mutable_pawn();
-  pawn->set_entity(sample->pawn_handle);
-  pawn->set_hero(sample->hero_id);
-  pawn->set_team(sample->team);
-  pawn->set_health(sample->health);
-  pawn->set_max_health(sample->max_health);
-  if (sample->effective_max_health) {
-    pawn->set_effective_max_health(*sample->effective_max_health);
+  pawn->set_entity(sample.pawn_handle);
+  pawn->set_hero(sample.hero_id);
+  pawn->set_team(sample.team);
+  pawn->set_health(sample.health);
+  pawn->set_max_health(sample.max_health);
+  if (sample.effective_max_health) {
+    pawn->set_effective_max_health(*sample.effective_max_health);
   }
 
   // Copy the pawn's position and view.
-  pawn->mutable_position()->set_x(sample->x);
-  pawn->mutable_position()->set_y(sample->y);
-  pawn->mutable_position()->set_z(sample->z);
-  SetAngles(pawn->mutable_eye_angles(), sample->eye_angles);
-  SetAngles(pawn->mutable_camera_angles(), sample->camera_angles);
+  pawn->mutable_position()->set_x(sample.x);
+  pawn->mutable_position()->set_y(sample.y);
+  pawn->mutable_position()->set_z(sample.z);
+  SetAngles(pawn->mutable_eye_angles(), sample.eye_angles);
+  SetAngles(pawn->mutable_camera_angles(), sample.camera_angles);
 
   // Copy the optional readings the sample carries.
-  if (sample->stamina) {
-    pawn->set_stamina(sample->stamina->current);
-    pawn->set_max_stamina(sample->stamina->max);
+  if (sample.stamina) {
+    pawn->set_stamina(sample.stamina->current);
+    pawn->set_max_stamina(sample.stamina->max);
   }
-  pawn->set_generation(sample->session_generation);
-  if (sample->currencies) {
-    pawn->set_souls((*sample->currencies)[0]);
-    pawn->set_ability_points((*sample->currencies)[1]);
-    pawn->set_ability_unlocks((*sample->currencies)[2]);
+  pawn->set_generation(sample.session_generation);
+  if (sample.currencies) {
+    pawn->set_souls((*sample.currencies)[0]);
+    pawn->set_ability_points((*sample.currencies)[1]);
+    pawn->set_ability_unlocks((*sample.currencies)[2]);
   }
 
   // Copy the pawn's eye and velocity when the sample has them.
-  if (sample->eye_position) {
-    SetVector(pawn->mutable_eye_position(), *sample->eye_position);
+  if (sample.eye_position) {
+    SetVector(pawn->mutable_eye_position(), *sample.eye_position);
   }
-  if (const auto camera = services_.CameraPosition(request.player())) {
+  if (const auto camera = services_.CameraPosition(slot)) {
     SetVector(pawn->mutable_camera_position(), *camera);
   }
-  if (sample->movement && sample->movement->abs_velocity) {
-    SetVector(pawn->mutable_velocity(), *sample->movement->abs_velocity);
+  if (sample.movement && sample.movement->abs_velocity) {
+    SetVector(pawn->mutable_velocity(), *sample.movement->abs_velocity);
   }
 
   // Copy the hero's scoreboard line.
-  if (sample->score) {
+  if (sample.score) {
     // Copy the scoreboard.
     auto* score = pawn->mutable_score();
-    score->set_kills(sample->score->kills);
-    score->set_deaths(sample->score->deaths);
-    score->set_assists(sample->score->assists);
-    score->set_last_hits(sample->score->last_hits);
+    score->set_kills(sample.score->kills);
+    score->set_deaths(sample.score->deaths);
+    score->set_assists(sample.score->assists);
+    score->set_last_hits(sample.score->last_hits);
 
     // Then denies, damage, healing and net worth.
-    score->set_denies(sample->score->denies);
-    score->set_hero_damage(sample->score->hero_damage);
-    score->set_hero_healing(sample->score->hero_healing);
-    score->set_net_worth(sample->score->net_worth);
+    score->set_denies(sample.score->denies);
+    score->set_hero_damage(sample.score->hero_damage);
+    score->set_hero_healing(sample.score->hero_healing);
+    score->set_net_worth(sample.score->net_worth);
   }
 
   // The game marks the hero carrying the urn with its holding-idol state.
   abilities::ModifierStateRequest holding;
-  holding.set_entity(sample->pawn_handle);
+  holding.set_entity(sample.pawn_handle);
   holding.set_state("MODIFIER_STATE_HOLDING_IDOL");
   if (const auto carrying = ModifierState(holding)) {
     pawn->set_carrying_urn(carrying->active());
   }
-  return response;
 }
 
 std::expected<gameinterop::WorldEntities*, std::string> Game::World() {

@@ -2,6 +2,7 @@
 
 import * as abilitiesPb from '../../src/wasm/abilities/abilities.pb.js'
 import * as combatPb from '../../src/wasm/combat/combat.pb.js'
+import * as controllersPb from '../../src/wasm/controllers/controllers.pb.js'
 import * as effectsPb from '../../src/wasm/effects/effects.pb.js'
 import * as entitiesPb from '../../src/wasm/entities/entities.pb.js'
 import * as fieldsPb from '../../src/wasm/fields/fields.pb.js'
@@ -19,7 +20,8 @@ import * as settingsPb from '../../src/wasm/settings/settings.pb.js'
 import * as uiPb from '../../src/wasm/ui/ui.pb.js'
 import * as wasmPb from '../../src/wasm/wasm.pb.js'
 import { heroNamed } from './heroes.js'
-import { call } from './host.js'
+import { call, callRead } from './host.js'
+import { pawnOf } from './pawns.js'
 
 /** Vector is a position or direction in the world, in game units. */
 export interface Vector {
@@ -158,6 +160,68 @@ const definitionFileValues: Record<Definition_File, manifestPb.Definition_File> 
   fileBotDifficulty: 2,
   fileNpcUnits: 3,
   fileModifiers: 4,
+}
+
+/**
+ * ControllerStream is the state of the stream that brings one player's
+ * controllers to the host, as a mod reads it.
+ */
+export type ControllerStream =
+  | 'none'
+  | 'live'
+  | 'unfocused'
+  | 'stale'
+
+/** controllerStreamNames decodes each ControllerStream; an unknown value has no name. */
+const controllerStreamNames: Partial<Record<number, ControllerStream>> = {
+  1: 'none',
+  2: 'live',
+  3: 'unfocused',
+  4: 'stale',
+}
+
+/**
+ * GamepadButton names one button of the gamepad layout, by position as SDL
+ * names them: South is A on an Xbox controller and Cross on a PlayStation one.
+ */
+export type GamepadButton =
+  | 'south'
+  | 'east'
+  | 'west'
+  | 'north'
+  | 'back'
+  | 'guide'
+  | 'start'
+  | 'leftStick'
+  | 'rightStick'
+  | 'leftShoulder'
+  | 'rightShoulder'
+  | 'dpadUp'
+  | 'dpadDown'
+  | 'dpadLeft'
+  | 'dpadRight'
+  | 'misc'
+  | 'touchpad'
+
+/** gamepadButtonNames decodes each GamepadButton; an unknown value has no name. */
+const gamepadButtonNames: Partial<Record<number, GamepadButton>> = {
+  1: 'south',
+  2: 'east',
+  3: 'west',
+  4: 'north',
+  5: 'back',
+  6: 'guide',
+  7: 'start',
+  8: 'leftStick',
+  9: 'rightStick',
+  10: 'leftShoulder',
+  11: 'rightShoulder',
+  12: 'dpadUp',
+  13: 'dpadDown',
+  14: 'dpadLeft',
+  15: 'dpadRight',
+  16: 'misc',
+  17: 'touchpad',
 }
 
 /** MovementAction is a movement fact the game announced for a hero. */
@@ -529,6 +593,21 @@ const cameraParamValues: Record<CameraParam, playersPb.CameraParam> = {
   target: 2,
   verticalOffset: 3,
   horizontalOffset: 4,
+}
+
+/** PingKind is how a player pinged. */
+export type PingKind =
+  | 'map'
+  | 'wheel'
+  | 'quickResponse'
+  | 'ability'
+
+/** pingKindNames decodes each PingKind; an unknown value has no name. */
+const pingKindNames: Partial<Record<number, PingKind>> = {
+  0: 'map',
+  1: 'wheel',
+  2: 'quickResponse',
+  3: 'ability',
 }
 
 /** ServiceFailure says why a service call ended without an answer. */
@@ -1540,6 +1619,177 @@ function toDefinitionFieldOptions(value: DefinitionFieldOptions): manifestPb.Def
   }
 }
 
+/** ControllerInfo describes one device a client reads. */
+export interface ControllerInfo {
+  /**
+   * id identifies the device within its stream for as long as it stays
+   * attached. A device plugged in again gets a new id.
+   */
+  readonly id: number
+  /** name is the device's name, such as "Xbox Series X Controller". */
+  readonly name: string
+  /**
+   * guid is SDL's joystick GUID in hexadecimal, which identifies the model
+   * and the way it is attached.
+   */
+  readonly guid: string
+  /**
+   * vendor and product are the USB vendor and product IDs, or zero when the
+   * device does not report them.
+   */
+  readonly vendor: number
+  readonly product: number
+  /**
+   * axes, buttons and hats count the device's raw inputs, which State's
+   * lists follow.
+   */
+  readonly axes: number
+  readonly buttons: number
+  readonly hats: number
+  /**
+   * gamepad is true when SDL knows the device's gamepad layout, so State
+   * carries the gamepad layer.
+   */
+  readonly gamepad: boolean
+}
+
+/** fromControllerInfo decodes a ControllerInfo. */
+function fromControllerInfo(message: controllersPb.ControllerInfo): ControllerInfo {
+  return {
+    id: message.id ?? 0,
+    name: message.name ?? '',
+    guid: message.guid ?? '',
+    vendor: message.vendor ?? 0,
+    product: message.product ?? 0,
+    axes: message.axes ?? 0,
+    buttons: message.buttons ?? 0,
+    hats: message.hats ?? 0,
+    gamepad: message.gamepad ?? false,
+  }
+}
+
+/**
+ * Gamepad is a device's gamepad layer, with named sticks, triggers and
+ * buttons, for a device whose layout SDL knows.
+ */
+export interface Gamepad {
+  /**
+   * leftX, leftY, rightX and rightY are the sticks, from -1 to 1, with x
+   * positive to the right and y positive down, as SDL reports them.
+   */
+  readonly leftX: number
+  readonly leftY: number
+  readonly rightX: number
+  readonly rightY: number
+  /** leftTrigger and rightTrigger run from 0 at rest to 1 fully pulled. */
+  readonly leftTrigger: number
+  readonly rightTrigger: number
+  /** held lists the buttons held now. */
+  readonly held: GamepadButton[]
+  /**
+   * pressed and released list the buttons pressed and released since the
+   * previous state, once for each press, so a tap shorter than a server frame
+   * is listed in both.
+   */
+  readonly pressed: GamepadButton[]
+  readonly released: GamepadButton[]
+}
+
+/** fromGamepad decodes a Gamepad. */
+function fromGamepad(message: controllersPb.Gamepad): Gamepad {
+  return {
+    leftX: message.leftX ?? 0,
+    leftY: message.leftY ?? 0,
+    rightX: message.rightX ?? 0,
+    rightY: message.rightY ?? 0,
+    leftTrigger: message.leftTrigger ?? 0,
+    rightTrigger: message.rightTrigger ?? 0,
+    held: known(message.held, (v) => gamepadButtonNames[v]),
+    pressed: known(message.pressed, (v) => gamepadButtonNames[v]),
+    released: known(message.released, (v) => gamepadButtonNames[v]),
+  }
+}
+
+/**
+ * ControllerState is one device's inputs, the raw joystick layer always and
+ * the gamepad layer when SDL knows the device.
+ */
+export interface ControllerState {
+  /** id is the device's id in ControllerInfo. */
+  readonly id: number
+  /**
+   * axes holds each raw axis from -1 to 1, in the device's order. A radio
+   * transmitter's channels are its axes.
+   */
+  readonly axes: number[]
+  /** buttons holds whether each raw button is held, in the device's order. */
+  readonly buttons: boolean[]
+  /**
+   * hats holds each hat's position as SDL's mask: 1 up, 2 right, 4 down and
+   * 8 left, combined on a diagonal, and 0 centered.
+   */
+  readonly hats: number[]
+  /**
+   * pressed and released list the raw buttons, by index, pressed and
+   * released since the previous state, once for each press.
+   */
+  readonly pressed: number[]
+  readonly released: number[]
+  /** gamepad is the gamepad layer, when the device has one. */
+  readonly gamepad: Gamepad
+}
+
+/** fromControllerState decodes a ControllerState. */
+function fromControllerState(message: controllersPb.ControllerState): ControllerState {
+  return {
+    id: message.id ?? 0,
+    axes: message.axes ?? [],
+    buttons: message.buttons ?? [],
+    hats: message.hats ?? [],
+    pressed: message.pressed ?? [],
+    released: message.released ?? [],
+    gamepad: fromGamepad(message.gamepad ?? {}),
+  }
+}
+
+/** Controller is one device as a mod reads it. */
+export interface Controller {
+  /** info describes the device. */
+  readonly info: ControllerInfo
+  /**
+   * state is its inputs now, with the presses and releases since the mod's
+   * previous frame.
+   */
+  readonly state: ControllerState
+}
+
+/** fromController decodes a Controller. */
+function fromController(message: controllersPb.Controller): Controller {
+  return {
+    info: fromControllerInfo(message.info ?? {}),
+    state: fromControllerState(message.state ?? {}),
+  }
+}
+
+/** PlayerControllers is one watched player's controllers in a frame. */
+export interface PlayerControllers {
+  /** player is the player's slot. */
+  readonly player: Player
+  /** stream is the state of the stream that brings them. */
+  readonly stream?: ControllerStream
+  /** controllers lists the player's devices, empty while stream is none. */
+  readonly controllers: Controller[]
+}
+
+/** fromPlayerControllers decodes a PlayerControllers. */
+function fromPlayerControllers(message: controllersPb.PlayerControllers): PlayerControllers {
+  return {
+    player: Player.of(message.player ?? 0),
+    stream: controllerStreamNames[message.stream ?? 0],
+    controllers: (message.controllers ?? []).map((v) => fromController(v)),
+  }
+}
+
 /**
  * MovementSample is one watched hero's movement on one tick, as the game keeps
  * it. A hero whose position, velocity or ground the game does not provide has
@@ -2102,7 +2352,8 @@ function fromRestoredEvent(message: playersPb.RestoredEvent): RestoredEvent {
 }
 
 /**
- * PlayersChangedEvent holds every occupied player slot, as Players lists them.
+ * PlayersChangedEvent holds every player slot with a seat, connected or
+ * away, as Players lists them.
  */
 export interface PlayersChangedEvent {
   readonly players: Connection[]
@@ -2127,6 +2378,40 @@ export interface PlayerJoinedEvent {
 
 /** fromPlayerJoinedEvent decodes a PlayerJoinedEvent. */
 function fromPlayerJoinedEvent(message: playersPb.PlayerJoinedEvent): PlayerJoinedEvent {
+  return {
+    connection: fromConnection(message.connection ?? {}),
+  }
+}
+
+/**
+ * PlayerAwayEvent reports a joined player whose client disconnected while the
+ * server holds their seat. Their controller and hero stay in the game, and the
+ * player may return to them.
+ */
+export interface PlayerAwayEvent {
+  /** connection is the player as Players lists them, away. */
+  readonly connection: Connection
+}
+
+/** fromPlayerAwayEvent decodes a PlayerAwayEvent. */
+function fromPlayerAwayEvent(message: playersPb.PlayerAwayEvent): PlayerAwayEvent {
+  return {
+    connection: fromConnection(message.connection ?? {}),
+  }
+}
+
+/**
+ * PlayerReturnedEvent reports an away player who reconnected to their seat
+ * and finished joining again. The seat, its generation and its hero are the
+ * ones they left.
+ */
+export interface PlayerReturnedEvent {
+  /** connection is the player as Players lists them, ready again. */
+  readonly connection: Connection
+}
+
+/** fromPlayerReturnedEvent decodes a PlayerReturnedEvent. */
+function fromPlayerReturnedEvent(message: playersPb.PlayerReturnedEvent): PlayerReturnedEvent {
   return {
     connection: fromConnection(message.connection ?? {}),
   }
@@ -2175,9 +2460,13 @@ export interface Connection {
   readonly bot: boolean
   /**
    * ready is true once a human has finished joining; bots are always ready.
+   * An away player is not ready.
    */
   readonly ready: boolean
-  /** generation changes each time a new connection takes the slot. */
+  /**
+   * generation identifies the seat: it changes when a new player or bot takes
+   * the slot, and stays the same when an away player returns.
+   */
   readonly generation: number
   /**
    * roles are what the player is to the running mods, as the program that
@@ -2186,6 +2475,11 @@ export interface Connection {
    * shared data checks its own writers.
    */
   readonly roles: ModRole[]
+  /**
+   * away is true while the player's client is disconnected and the server
+   * holds their seat for them to return.
+   */
+  readonly away: boolean
 }
 
 /** fromConnection decodes a Connection. */
@@ -2198,6 +2492,22 @@ function fromConnection(message: playersPb.Connection): Connection {
     ready: message.ready ?? false,
     generation: message.generation ?? 0,
     roles: known(message.roles, (v) => modRoleNames[v]),
+    away: message.away ?? false,
+  }
+}
+
+/** PlayerPawn is one player's pawn. */
+export interface PlayerPawn {
+  /** player is the player's server slot. */
+  readonly player: Player
+  readonly pawn: Pawn
+}
+
+/** fromPlayerPawn decodes a PlayerPawn. */
+function fromPlayerPawn(message: playersPb.PlayerPawn): PlayerPawn {
+  return {
+    player: Player.of(message.player ?? 0),
+    pawn: fromPawn(message.pawn ?? {}),
   }
 }
 
@@ -2776,6 +3086,7 @@ export interface StartResult {
   chat: boolean
   /**
    * joins asks for a PlayerJoined event as each player the mod serves joins,
+   * PlayerAway and PlayerReturned events as they disconnect and come back,
    * and a PlayerLeft event as each leaves.
    */
   joins: boolean
@@ -2806,6 +3117,8 @@ export interface StartResult {
    * parries asks for a Parried event after each parry that catches a swing.
    */
   parries: boolean
+  /** pings asks for a Ping event before each ping a player sends. */
+  pings: boolean
 }
 
 /** toStartResult encodes a StartResult. */
@@ -2823,6 +3136,7 @@ function toStartResult(value: StartResult): wasmPb.StartResult {
     levels: value.levels,
     melees: value.melees,
     parries: value.parries,
+    pings: value.pings,
   }
 }
 
@@ -2843,6 +3157,11 @@ export interface FrameEvent {
    * cannot find, is unknown rather than absent from the samples.
    */
   readonly interactions: InteractionKind[]
+  /**
+   * controllers holds each watched player's controllers in every frame, with
+   * the presses and releases since the mod's previous frame.
+   */
+  readonly controllers: PlayerControllers[]
 }
 
 /** fromFrameEvent decodes a FrameEvent. */
@@ -2852,6 +3171,7 @@ function fromFrameEvent(message: wasmPb.FrameEvent): FrameEvent {
     timeSeconds: message.timeSeconds ?? 0,
     movement: (message.movement ?? []).map((v) => fromMovementSample(v)),
     interactions: known(message.interactions, (v) => interactionKindNames[v]),
+    controllers: (message.controllers ?? []).map((v) => fromPlayerControllers(v)),
   }
 }
 
@@ -2903,6 +3223,58 @@ function fromChatEvent(message: wasmPb.ChatEvent): ChatEvent {
     text: message.text ?? '',
     all: message.all ?? false,
     lane: message.lane ?? 0,
+  }
+}
+
+/** PingEvent carries one ping a player sent, before anyone sees it. */
+export interface PingEvent {
+  /** player is the player who pinged. */
+  readonly player: Player
+  /** kind is how they pinged. */
+  readonly kind?: PingKind
+  /**
+   * option is the comms wheel line for a wheel ping, the
+   * m_unPingWheelOptionID of the game's scripts/ping_wheel_messages.vdata,
+   * and zero for another kind.
+   */
+  readonly option: number
+  /**
+   * concept is the voice line the ping speaks, a CitadelConcept_t value, or
+   * zero for none.
+   */
+  readonly concept: number
+}
+
+/** fromPingEvent decodes a PingEvent. */
+function fromPingEvent(message: wasmPb.PingEvent): PingEvent {
+  return {
+    player: Player.of(message.player ?? 0),
+    kind: pingKindNames[message.kind ?? 0],
+    option: message.option ?? 0,
+    concept: message.concept ?? 0,
+  }
+}
+
+/** PingResult answers a Ping event. */
+export interface PingResult {
+  /**
+   * block drops the ping for every player, the sender included: its marker,
+   * sound, voice line and chat line.
+   */
+  block: boolean
+  /**
+   * muteVoice lists the players, by slot, who get a ping that is not blocked
+   * without its voice line: they still see its marker and hear its sound.
+   * The other recipients get it whole.
+   */
+  muteVoice?: readonly number[]
+}
+
+/** toPingResult encodes a PingResult. */
+function toPingResult(value: PingResult): wasmPb.PingResult {
+  return {
+    block: value.block,
+    muteVoice: value.muteVoice?.map((v) => int32(v)),
   }
 }
 
@@ -3056,10 +3428,7 @@ export class Player {
    * made a pawn. The pawn's entity changes whenever the game replaces it.
    */
   pawn(): Pawn | undefined {
-    const reply = call('Pawn', playersPb.PlayerRequest.toBinary({ player: this.slot }))
-    if (reply === undefined) return undefined
-    const response = playersPb.PawnResponse.fromBinary(reply)
-    return response.pawn === undefined ? undefined : fromPawn(response.pawn)
+    return pawnOf(this.slot, decodePawn)
   }
 
   /**
@@ -3068,7 +3437,7 @@ export class Player {
    * defaults.
    */
   setting(key: string): string | undefined {
-    const reply = call('PlayerSetting', settingsPb.PlayerSettingRequest.toBinary({ player: this.slot, key }))
+    const reply = callRead('PlayerSetting', settingsPb.PlayerSettingRequest.toBinary({ player: this.slot, key }))
     if (reply === undefined) return undefined
     const response = settingsPb.SettingResponse.fromBinary(reply)
     return response.value ?? ''
@@ -3104,7 +3473,7 @@ export class Player {
 
   /** handedOff returns the player's handoff state, or empty. */
   handedOff(): string | undefined {
-    const reply = call('PlayerHandedOff', playersPb.PlayerRequest.toBinary({ player: this.slot }))
+    const reply = callRead('PlayerHandedOff', playersPb.PlayerRequest.toBinary({ player: this.slot }))
     if (reply === undefined) return undefined
     const response = handoffPb.HandedOffResponse.fromBinary(reply)
     return response.text ?? ''
@@ -3238,7 +3607,7 @@ export class Player {
    * or none without a live hero.
    */
   abilities(): Ability[] {
-    const reply = call('Abilities', playersPb.PlayerRequest.toBinary({ player: this.slot }))
+    const reply = callRead('Abilities', playersPb.PlayerRequest.toBinary({ player: this.slot }))
     if (reply === undefined) return []
     const response = abilitiesPb.AbilitiesResponse.fromBinary(reply)
     return (response.abilities ?? []).map((v) => fromAbility(v))
@@ -3310,7 +3679,7 @@ export class Player {
    * hero with no expiry, giving it back whenever the game removes it or the
    * hero returns. Every hero that gains the modifier from the same ability
    * keeps it until the hold ends. Releasing leaves the hero's current
-   * modifier until it dies.
+   * modifier until it dies; the mod stopping removes it.
    */
   holdModifier(modifier: string, active?: boolean): boolean {
     return call('HoldModifier', abilitiesPb.HoldModifierRequest.toBinary({ player: this.slot, modifier, active })) !== undefined
@@ -3513,7 +3882,7 @@ export class Player {
    * player is alive or dead.
    */
   buttons(): bigint | undefined {
-    const reply = call('Buttons', playersPb.PlayerRequest.toBinary({ player: this.slot }))
+    const reply = callRead('Buttons', playersPb.PlayerRequest.toBinary({ player: this.slot }))
     if (reply === undefined) return undefined
     const response = inputPb.ButtonsResponse.fromBinary(reply)
     return response.buttons ?? 0n
@@ -3525,6 +3894,16 @@ export class Player {
    */
   watchMovement(watch: boolean): boolean {
     return call('WatchMovement', movementPb.WatchMovementRequest.toBinary({ player: this.slot, watch })) !== undefined
+  }
+
+  /**
+   * watchControllers adds a player's controllers to the controller lists of
+   * each Frame event, or removes them. The player's client reads the devices
+   * only while some mod watches them, and until it answers the player is
+   * listed with no stream.
+   */
+  watchControllers(watch: boolean): boolean {
+    return call('WatchControllers', controllersPb.WatchControllersRequest.toBinary({ player: this.slot, watch })) !== undefined
   }
 }
 
@@ -3592,7 +3971,7 @@ export class WorldObject {
    * report it and particle anchors take it.
    */
   entity(): number | undefined {
-    const reply = call('ObjectEntity', objectsPb.ObjectRequest.toBinary({ object: this.id }))
+    const reply = callRead('ObjectEntity', objectsPb.ObjectRequest.toBinary({ object: this.id }))
     if (reply === undefined) return undefined
     const response = entitiesPb.EntityResponse.fromBinary(reply)
     return response.entity ?? 0
@@ -3610,7 +3989,7 @@ export class Npc {
 
   /** read returns the unit's state, or nothing once it is gone. */
   read(): NpcState | undefined {
-    const reply = call('ReadNpc', npcsPb.NpcRequest.toBinary({ npc: this.entity }))
+    const reply = callRead('ReadNpc', npcsPb.NpcRequest.toBinary({ npc: this.entity }))
     if (reply === undefined) return undefined
     const response = npcsPb.NpcStateResponse.fromBinary(reply)
     return response.state === undefined ? undefined : fromNpcState(response.state)
@@ -3666,7 +4045,7 @@ export class Pickup {
    * uncollected.
    */
   present(): boolean {
-    const reply = call('PickupPresent', entitiesPb.PickupRequest.toBinary({ pickup: this.entity }))
+    const reply = callRead('PickupPresent', entitiesPb.PickupRequest.toBinary({ pickup: this.entity }))
     if (reply === undefined) return false
     const response = entitiesPb.AliveResponse.fromBinary(reply)
     return response.alive ?? false
@@ -3682,6 +4061,11 @@ export class Pickup {
     const response = entitiesPb.AliveResponse.fromBinary(reply)
     return response.alive ?? false
   }
+}
+
+/** decodePawn decodes one encoded Pawn for pawnOf. */
+function decodePawn(bytes: Uint8Array): Pawn {
+  return fromPawn(playersPb.Pawn.fromBinary(bytes))
 }
 
 /**
@@ -3723,13 +4107,26 @@ export function precache(options: PrecacheOptions): boolean {
 }
 
 /**
+ * pawns returns every player's pawn this frame in one reply, in slot order,
+ * each as Pawn returns it: a mode that reads every hero each frame makes
+ * one call instead of one per player. A slot Pawn answers nothing for is
+ * left out.
+ */
+export function pawns(): PlayerPawn[] {
+  const reply = callRead('Pawns', new Uint8Array())
+  if (reply === undefined) return []
+  const response = playersPb.PawnsResponse.fromBinary(reply)
+  return (response.pawns ?? []).map((v) => fromPlayerPawn(v))
+}
+
+/**
  * readFile reads one of the mod's files: the host's copy, which the mod
  * wrote or the server's operator placed, else the one the mod ships under
  * data/. A file in neither reads as unset. Names that leave the mod's
  * directories are refused.
  */
 export function readFile(path: string): string | undefined {
-  const reply = call('ReadFile', filesPb.ReadFileRequest.toBinary({ path }))
+  const reply = callRead('ReadFile', filesPb.ReadFileRequest.toBinary({ path }))
   if (reply === undefined) return undefined
   const response = filesPb.ReadFileResponse.fromBinary(reply)
   return response.text
@@ -3742,7 +4139,7 @@ export function readFile(path: string): string | undefined {
  * whole file during the call.
  */
 export function readFileBytes(path: string): Uint8Array | undefined {
-  const reply = call('ReadFileBytes', filesPb.ReadFileRequest.toBinary({ path }))
+  const reply = callRead('ReadFileBytes', filesPb.ReadFileRequest.toBinary({ path }))
   if (reply === undefined) return undefined
   const response = filesPb.ReadFileBytesResponse.fromBinary(reply)
   return response.data
@@ -3784,7 +4181,7 @@ export function handoff(text: string): boolean {
 
 /** handedOff returns the game's handoff state, or empty. */
 export function handedOff(): string | undefined {
-  const reply = call('HandedOff', new Uint8Array())
+  const reply = callRead('HandedOff', new Uint8Array())
   if (reply === undefined) return undefined
   const response = handoffPb.HandedOffResponse.fromBinary(reply)
   return response.text ?? ''
@@ -3798,7 +4195,7 @@ export function handedOff(): string | undefined {
  * world.
  */
 export function heroBuild(hero: string): BuildCategory[] {
-  const reply = call('HeroBuild', abilitiesPb.HeroBuildRequest.toBinary({ hero: heroName(hero) }))
+  const reply = callRead('HeroBuild', abilitiesPb.HeroBuildRequest.toBinary({ hero: heroName(hero) }))
   if (reply === undefined) return []
   const response = abilitiesPb.HeroBuildResponse.fromBinary(reply)
   return (response.categories ?? []).map((v) => fromBuildCategory(v))
@@ -3826,7 +4223,7 @@ export function silenceVoice(concepts?: readonly string[]): boolean {
  * m_MeshGroupMask of CModelState that chooses which mesh groups draw.
  */
 export function readField(entity: number, className: string, field: string, type: FieldType): FieldValue | undefined {
-  const reply = call('ReadField', fieldsPb.ReadFieldRequest.toBinary({ entity, className, field, type: fieldTypeValues[type] }))
+  const reply = callRead('ReadField', fieldsPb.ReadFieldRequest.toBinary({ entity, className, field, type: fieldTypeValues[type] }))
   if (reply === undefined) return undefined
   const response = fieldsPb.FieldResponse.fromBinary(reply)
   return fromFieldValue(response.value)
@@ -3841,7 +4238,7 @@ export function readField(entity: number, className: string, field: string, type
  * memory.
  */
 export function readModifierField(entity: number, modifier: string, className: string, field: string, type: FieldType): FieldValue | undefined {
-  const reply = call('ReadModifierField', fieldsPb.ReadModifierFieldRequest.toBinary({ entity, modifier, className, field, type: fieldTypeValues[type] }))
+  const reply = callRead('ReadModifierField', fieldsPb.ReadModifierFieldRequest.toBinary({ entity, modifier, className, field, type: fieldTypeValues[type] }))
   if (reply === undefined) return undefined
   const response = fieldsPb.FieldResponse.fromBinary(reply)
   return fromFieldValue(response.value)
@@ -3873,7 +4270,7 @@ export function writeField(entity: number, className: string, field: string, typ
  * handle, a boolean or a vector. A list of structures cannot be read.
  */
 export function readFieldList(entity: number, className: string, field: string, type: FieldType): FieldValue[] {
-  const reply = call('ReadFieldList', fieldsPb.ReadFieldRequest.toBinary({ entity, className, field, type: fieldTypeValues[type] }))
+  const reply = callRead('ReadFieldList', fieldsPb.ReadFieldRequest.toBinary({ entity, className, field, type: fieldTypeValues[type] }))
   if (reply === undefined) return []
   const response = fieldsPb.FieldListResponse.fromBinary(reply)
   return known(response.values, (v) => fromFieldValue(v))
@@ -3893,7 +4290,7 @@ export function writeFieldList(entity: number, className: string, field: string,
  * CCitadelPlayerPawn, whose fields ReadField reads, and its designer name.
  */
 export function entityClass(entity: number): EntityClassName | undefined {
-  const reply = call('EntityClass', entitiesPb.EntityRequest.toBinary({ entity }))
+  const reply = callRead('EntityClass', entitiesPb.EntityRequest.toBinary({ entity }))
   if (reply === undefined) return undefined
   const response = entitiesPb.EntityClassResponse.fromBinary(reply)
   return response.name === undefined ? undefined : fromEntityClassName(response.name)
@@ -3904,7 +4301,7 @@ export function entityClass(entity: number): EntityClassName | undefined {
  * key value gave it, or an empty name for an unnamed entity.
  */
 export function entityName(entity: number): string | undefined {
-  const reply = call('EntityName', entitiesPb.EntityRequest.toBinary({ entity }))
+  const reply = callRead('EntityName', entitiesPb.EntityRequest.toBinary({ entity }))
   if (reply === undefined) return undefined
   const response = entitiesPb.EntityNameResponse.fromBinary(reply)
   return response.name ?? ''
@@ -3916,7 +4313,7 @@ export function entityName(entity: number): string | undefined {
  * place in the world has one, such as one of the map's boxes.
  */
 export function entityPosition(entity: number): EntityPlacement | undefined {
-  const reply = call('EntityPosition', entitiesPb.EntityRequest.toBinary({ entity }))
+  const reply = callRead('EntityPosition', entitiesPb.EntityRequest.toBinary({ entity }))
   if (reply === undefined) return undefined
   const response = entitiesPb.EntityPositionResponse.fromBinary(reply)
   return response.placement === undefined ? undefined : fromEntityPlacement(response.placement)
@@ -3927,7 +4324,7 @@ export function entityPosition(entity: number): EntityPlacement | undefined {
  * MODIFIER_STATE_PARRY_ACTIVE.
  */
 export function modifierState(entity: number, state: string): boolean {
-  const reply = call('ModifierState', abilitiesPb.ModifierStateRequest.toBinary({ entity, state }))
+  const reply = callRead('ModifierState', abilitiesPb.ModifierStateRequest.toBinary({ entity, state }))
   if (reply === undefined) return false
   const response = abilitiesPb.ActiveResponse.fromBinary(reply)
   return response.active ?? false
@@ -3940,7 +4337,7 @@ export function modifierState(entity: number, state: string): boolean {
  * empty list.
  */
 export function modifiers(entity: number): Modifier[] {
-  const reply = call('Modifiers', entitiesPb.EntityRequest.toBinary({ entity }))
+  const reply = callRead('Modifiers', entitiesPb.EntityRequest.toBinary({ entity }))
   if (reply === undefined) return []
   const response = abilitiesPb.ModifiersResponse.fromBinary(reply)
   return (response.modifiers ?? []).map((v) => fromModifier(v))
@@ -4189,7 +4586,7 @@ export function createPickup(kind: PickupKind, position: Vector): Pickup | undef
  * zip_line_node.
  */
 export function findEntities(className: string): number[] {
-  const reply = call('FindEntities', entitiesPb.FindEntitiesRequest.toBinary({ className }))
+  const reply = callRead('FindEntities', entitiesPb.FindEntitiesRequest.toBinary({ className }))
   if (reply === undefined) return []
   const response = entitiesPb.EntitiesResponse.fromBinary(reply)
   return response.entities ?? []
@@ -4200,7 +4597,7 @@ export function findEntities(className: string): number[] {
  * the targetname a map or the targetname key value of CreateEntity gave it.
  */
 export function findEntitiesByName(name: string): number[] {
-  const reply = call('FindEntitiesByName', entitiesPb.FindEntitiesByNameRequest.toBinary({ name }))
+  const reply = callRead('FindEntitiesByName', entitiesPb.FindEntitiesByNameRequest.toBinary({ name }))
   if (reply === undefined) return []
   const response = entitiesPb.EntitiesResponse.fromBinary(reply)
   return response.entities ?? []
@@ -4246,7 +4643,7 @@ export function killEntity(options: KillOptions): boolean {
  * nothing or the world's collision is not ready.
  */
 export function trace(options: TraceOptions): TraceHit | undefined {
-  const reply = call('Trace', combatPb.TraceOptions.toBinary(toTraceOptions(options)))
+  const reply = callRead('Trace', combatPb.TraceOptions.toBinary(toTraceOptions(options)))
   if (reply === undefined) return undefined
   const response = combatPb.TraceResponse.fromBinary(reply)
   return response.hit === undefined ? undefined : fromTraceHit(response.hit)
@@ -4273,7 +4670,7 @@ export function pause(paused: boolean): boolean {
 
 /** matchClock returns the match time in seconds that the scoreboard shows. */
 export function matchClock(): number | undefined {
-  const reply = call('MatchClock', new Uint8Array())
+  const reply = callRead('MatchClock', new Uint8Array())
   if (reply === undefined) return undefined
   const response = matchPb.MatchClockResponse.fromBinary(reply)
   return response.seconds ?? 0
@@ -4289,7 +4686,7 @@ export function holdMatchClock(seconds?: number): boolean {
 
 /** rift reads the Rift objective's state. */
 export function rift(): RiftState | undefined {
-  const reply = call('Rift', new Uint8Array())
+  const reply = callRead('Rift', new Uint8Array())
   if (reply === undefined) return undefined
   const response = matchPb.RiftResponse.fromBinary(reply)
   return response.state === undefined ? undefined : fromRiftState(response.state)
@@ -4360,7 +4757,8 @@ export function watchProjectiles(options: ProjectileOptions): boolean {
  * holdEntityModifier keeps a modifier, named as GiveModifier names it, on a
  * live entity with no expiry, giving it back whenever the game removes it
  * while the entity lives. The hold ends with the entity or when active is
- * false.
+ * false. Releasing leaves the entity's current modifier; the mod stopping
+ * removes it.
  */
 export function holdEntityModifier(entity: number, modifier: string, active?: boolean): boolean {
   return call('HoldEntityModifier', abilitiesPb.HoldEntityModifierRequest.toBinary({ entity, modifier, active })) !== undefined
@@ -4389,6 +4787,12 @@ export interface ModHandlers {
    * serves, while the mod asked for chat, before the line's command.
    */
   chat(event: ChatEvent): void
+  /**
+   * ping offers each ping a player the mod serves sends, before the server
+   * shows it to anyone, while the mod asked for pings. The mod's answer may
+   * drop it for every recipient or mute its voice line for some.
+   */
+  ping(event: PingEvent): PingResult
   /**
    * world follows each world load, and start when a world has already
    * loaded. Objects and bots from an earlier world are gone by then.
@@ -4484,17 +4888,35 @@ export interface ModHandlers {
    */
   playerJoined(event: PlayerJoinedEvent): void
   /**
-   * playerLeft reports each joined player leaving the mod, once. A player who
-   * disconnects is reported before the engine removes them, so their slot
-   * and hero still read, and before the PlayersChanged that drops them. A
+   * playerAway reports a joined human whose client disconnected while the
+   * server holds their seat. The player is not gone: their controller and
+   * hero stay, and they may return to them, so a mod keeps their seat as it
+   * stands. It follows the PlayersChanged that lists them away.
+   */
+  playerAway(event: PlayerAwayEvent): void
+  /**
+   * playerReturned reports an away player who reconnected to their seat and
+   * finished joining again. It follows the PlayersChanged that lists them
+   * ready.
+   */
+  playerReturned(event: PlayerReturnedEvent): void
+  /**
+   * playerLeft reports each joined player leaving the mod, once, when their
+   * seat ends: a bot removed, a human kicked or released by the program that
+   * runs the host, or a human away past the game's limit. A human whose
+   * client merely disconnects is away first. The leave arrives before the
+   * engine frees the slot, so the slot and hero still read, and before the
+   * PlayersChanged that drops them. Modlock then clears what the seat left:
+   * its hero is killed and kept down, and its controller leaves its team. A
    * disconnect the mod causes during its own event, such as removing a bot,
    * arrives after that event returns.
    */
   playerLeft(event: PlayerLeftEvent): void
   /**
-   * playersChanged reports the occupied player slots before the first event
-   * after Start, and again before the next event whenever a player joins,
-   * finishes joining or leaves, so a mod lists players without a call.
+   * playersChanged reports the player slots with a seat, connected or away,
+   * before the first event after Start, and again before the next event
+   * whenever a player joins, finishes joining, goes away, returns or leaves,
+   * so a mod lists players without a call.
    */
   playersChanged(event: PlayersChangedEvent): void
 }
@@ -4518,6 +4940,8 @@ export function serveMod(handlers: ModHandlers, bytes: Uint8Array): Uint8Array {
       case 'Chat':
         handlers.chat(fromChatEvent(wasmPb.ChatEvent.fromBinary(input)))
         return reply()
+      case 'Ping':
+        return reply(wasmPb.PingResult.toBinary(toPingResult(handlers.ping(fromPingEvent(wasmPb.PingEvent.fromBinary(input))))))
       case 'World':
         handlers.world(fromWorldEvent(wasmPb.WorldEvent.fromBinary(input)))
         return reply()
@@ -4581,6 +5005,12 @@ export function serveMod(handlers: ModHandlers, bytes: Uint8Array): Uint8Array {
         return reply()
       case 'PlayerJoined':
         handlers.playerJoined(fromPlayerJoinedEvent(playersPb.PlayerJoinedEvent.fromBinary(input)))
+        return reply()
+      case 'PlayerAway':
+        handlers.playerAway(fromPlayerAwayEvent(playersPb.PlayerAwayEvent.fromBinary(input)))
+        return reply()
+      case 'PlayerReturned':
+        handlers.playerReturned(fromPlayerReturnedEvent(playersPb.PlayerReturnedEvent.fromBinary(input)))
         return reply()
       case 'PlayerLeft':
         handlers.playerLeft(fromPlayerLeftEvent(playersPb.PlayerLeftEvent.fromBinary(input)))

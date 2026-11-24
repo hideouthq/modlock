@@ -98,7 +98,8 @@ class HostService {
     return std::unexpected("this host does not support Precache");
   }
 
-  // Players lists the occupied player slots in slot order. The libraries
+  // Players lists the player slots with a seat, connected or away, in slot
+  // order. The libraries
   // answer from the last PlayersChanged instead, once one arrived.
   virtual std::expected<players::PlayersResponse, std::string> Players() {
     return std::unexpected("this host does not support Players");
@@ -111,6 +112,14 @@ class HostService {
   virtual std::expected<players::PawnResponse, std::string> Pawn(
       const players::PlayerRequest& /*request*/) {
     return std::unexpected("this host does not support Pawn");
+  }
+
+  // Pawns returns every player's pawn this frame in one reply, in slot order,
+  // each as Pawn returns it: a mode that reads every hero each frame makes
+  // one call instead of one per player. A slot Pawn answers nothing for is
+  // left out.
+  virtual std::expected<players::PawnsResponse, std::string> Pawns() {
+    return std::unexpected("this host does not support Pawns");
   }
 
   // PlayerSetting returns the player's value of a setting the manifest
@@ -380,7 +389,7 @@ class HostService {
   // hero with no expiry, giving it back whenever the game removes it or the
   // hero returns. Every hero that gains the modifier from the same ability
   // keeps it until the hold ends. Releasing leaves the hero's current
-  // modifier until it dies.
+  // modifier until it dies; the mod stopping removes it.
   virtual std::expected<void, std::string> HoldModifier(
       const abilities::HoldModifierRequest& /*request*/) {
     return std::unexpected("this host does not support HoldModifier");
@@ -1076,6 +1085,15 @@ class HostService {
     return std::unexpected("this host does not support WatchMovement");
   }
 
+  // WatchControllers adds a player's controllers to the controller lists of
+  // each Frame event, or removes them. The player's client reads the devices
+  // only while some mod watches them, and until it answers the player is
+  // listed with no stream.
+  virtual std::expected<void, std::string> WatchControllers(
+      const controllers::WatchControllersRequest& /*request*/) {
+    return std::unexpected("this host does not support WatchControllers");
+  }
+
   // WatchProjectiles reports the projectiles with these designer names, such
   // as rocket_launcher_rocket_projectile, in Launch and Impact events. A new
   // call replaces the list; an empty list stops watching.
@@ -1087,7 +1105,8 @@ class HostService {
   // HoldEntityModifier keeps a modifier, named as GiveModifier names it, on a
   // live entity with no expiry, giving it back whenever the game removes it
   // while the entity lives. The hold ends with the entity or when active is
-  // false.
+  // false. Releasing leaves the entity's current modifier; the mod stopping
+  // removes it.
   virtual std::expected<void, std::string> HoldEntityModifier(
       const abilities::HoldEntityModifierRequest& /*request*/) {
     return std::unexpected("this host does not support HoldEntityModifier");
@@ -1174,6 +1193,11 @@ class HostService {
              return detail::Fail("the Pawn request is malformed");
            }
            return detail::Answer(host.Pawn(request));
+         }},
+        {"Pawns",
+         [](HostService& host, const std::string& bytes) {
+           static_cast<void>(bytes);
+           return detail::Answer(host.Pawns());
          }},
         {"PlayerSetting",
          [](HostService& host, const std::string& bytes) {
@@ -2123,6 +2147,14 @@ class HostService {
            }
            return detail::Answer(host.WatchMovement(request));
          }},
+        {"WatchControllers",
+         [](HostService& host, const std::string& bytes) {
+           controllers::WatchControllersRequest request;
+           if (!request.ParseFromString(bytes)) {
+             return detail::Fail("the WatchControllers request is malformed");
+           }
+           return detail::Answer(host.WatchControllers(request));
+         }},
         {"WatchProjectiles",
          [](HostService& host, const std::string& bytes) {
            combat::ProjectileOptions request;
@@ -2186,6 +2218,13 @@ class ModClient {
   // serves, while the mod asked for chat, before the line's command.
   std::expected<void, std::string> Chat(const ChatEvent& event) {
     return Send<void>("Chat", event);
+  }
+
+  // Ping offers each ping a player the mod serves sends, before the server
+  // shows it to anyone, while the mod asked for pings. The mod's answer may
+  // drop it for every recipient or mute its voice line for some.
+  std::expected<PingResult, std::string> Ping(const PingEvent& event) {
+    return Send<PingResult>("Ping", event);
   }
 
   // World follows each world load, and start when a world has already
@@ -2316,18 +2355,38 @@ class ModClient {
     return Send<void>("PlayerJoined", event);
   }
 
-  // PlayerLeft reports each joined player leaving the mod, once. A player who
-  // disconnects is reported before the engine removes them, so their slot
-  // and hero still read, and before the PlayersChanged that drops them. A
+  // PlayerAway reports a joined human whose client disconnected while the
+  // server holds their seat. The player is not gone: their controller and
+  // hero stay, and they may return to them, so a mod keeps their seat as it
+  // stands. It follows the PlayersChanged that lists them away.
+  std::expected<void, std::string> PlayerAway(const players::PlayerAwayEvent& event) {
+    return Send<void>("PlayerAway", event);
+  }
+
+  // PlayerReturned reports an away player who reconnected to their seat and
+  // finished joining again. It follows the PlayersChanged that lists them
+  // ready.
+  std::expected<void, std::string> PlayerReturned(const players::PlayerReturnedEvent& event) {
+    return Send<void>("PlayerReturned", event);
+  }
+
+  // PlayerLeft reports each joined player leaving the mod, once, when their
+  // seat ends: a bot removed, a human kicked or released by the program that
+  // runs the host, or a human away past the game's limit. A human whose
+  // client merely disconnects is away first. The leave arrives before the
+  // engine frees the slot, so the slot and hero still read, and before the
+  // PlayersChanged that drops them. Modlock then clears what the seat left:
+  // its hero is killed and kept down, and its controller leaves its team. A
   // disconnect the mod causes during its own event, such as removing a bot,
   // arrives after that event returns.
   std::expected<void, std::string> PlayerLeft(const players::PlayerLeftEvent& event) {
     return Send<void>("PlayerLeft", event);
   }
 
-  // PlayersChanged reports the occupied player slots before the first event
-  // after Start, and again before the next event whenever a player joins,
-  // finishes joining or leaves, so a mod lists players without a call.
+  // PlayersChanged reports the player slots with a seat, connected or away,
+  // before the first event after Start, and again before the next event
+  // whenever a player joins, finishes joining, goes away, returns or leaves,
+  // so a mod lists players without a call.
   std::expected<void, std::string> PlayersChanged(const players::PlayersChangedEvent& event) {
     return Send<void>("PlayersChanged", event);
   }

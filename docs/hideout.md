@@ -5,10 +5,14 @@ on top of upstream Modlock. Bebop Wars is a consumer, not a dependency of this
 fork. Mode rules, currencies, UI adapters and research commands belong in the
 mode project.
 
-This branch includes upstream through `06d29e0`. Upstream's `e9f1c39` now
+This branch includes upstream through `f8659ca`. Upstream's `e9f1c39` now
 changes modifier definitions (`FILE_MODIFIERS`), so the fork's own modifier
 writer from `b725809` is gone; that commit's definition readback, scripted
-press bypass and `cancelPress` remain, as does `5e63fed`. The `29ae444-bebop.2` release tag remains
+press bypass and `cancelPress` remain. Upstream's `abcc492` records each
+image's size in a compiled sheet, so the fork's `5e63fed` is gone; an image
+upstream cannot read gets no entry instead of failing the build. Upstream's
+`db82d74` adds `Modlock.onUnload`, and its `RendererFiles` matches the
+fork's, so both are upstream's now. The `29ae444-bebop.2` release tag remains
 unchanged. A branch update is not an update to an installed runtime: build the
 CLI, generated libraries, renderer and Windows host from the same revision
 before adopting it.
@@ -34,14 +38,12 @@ remaining checks.
 | Definition readback | Native definition layer | `readDefinitionField` reads the first float of a float field, or the whole number of a flag, integer or enum field within ±16777215, found by the same file, entry and path rules the manifest's `definitions` write through |
 | Whole-number definition fields | Native definition layer | A manifest `fields` value on a flag, integer or enum field is written in the field's own width once it is a whole number that width holds (an enum: its signed range) and within ±16777215, the most the manifest's float holds exactly; any other value is refused with the field's range |
 | Scripted press bypass and cancellation | Native input layer | A queued press bypasses blocking for one input; cancellation removes undelivered queued buttons |
-| Packaged image dimensions | Panorama content compiler | Stylesheet image tables use dimensions from packaged VTEX headers |
 | Numeric native tier bonuses | Native definition layer | Replace values of existing ability-upgrade rows; preserve native costs and row identity. `Definition.upgrades` and `upgrade_order` are fields 100 and 101, clear of upstream's numbers |
-| Layout unload callbacks | Panorama renderer and layout library | `Modlock.onUnload(handler)` runs once before a layout or its ancestor is removed or replaced; use it to cancel work |
+| Layout unload for native changes | Panorama layout library | Every layout listens for upstream's unload notice from its load, so one that only calls `Modlock.native` still releases its changes |
 | Native panel changes | Panorama renderer and layout library | `Modlock.native` is the one way a layout changes the game's own panels; every change is released when the layout unloads, and a released visibility goes back to the game's own CSS. Layouts are drawn only while the stock guard may hold the HUD, and the guard leaves a panel whose visibility a layout holds |
-| Renderer files for other hosts | Session | `session.RendererFiles(citadel, renderer, bridge)` compiles the renderer's part of a package, the same files a session mounts, for a host that mounts its own, such as Hideout's link helper with `?port=` in its bridge |
 | Session commands | Relay and renderer | The relay stream carries `connect` to a loopback port and `disconnect`, which the renderer runs as console commands |
 | Pawn observer service fields | Native entity field layer | Existing field reads and writes resolve `CPlayer_ObserverServices` through a pawn's schema-declared observer services pointer |
-| Shipped maps keep their names | Project and publish checks | A map the project ships as `maps/<map>.vpk` passes under any name; upstream's `hl_` rule still refuses a map the mod does not ship. As upstream, a project opens before its `hl_` map is compiled, and only publish asks for the `.vpk`. Name a new mode's map `hl_<name>` |
+| Shipped maps keep their names | Project, publish and content checks | A map the project ships as `maps/<map>.vpk` passes under any name, and `check.ContentName` lets a session or peer carry it under any name but one of `GameMaps`, the maps the game installs; upstream's `hl_` rule still refuses a map the mod does not ship. As upstream, a project opens before its `hl_` map is compiled, and only publish asks for the `.vpk`. Name a new mode's map `hl_<name>` |
 | Server-only mode settings | Native console layer | A console variable a mode sets reaches the player only if the game puts it back when the player leaves |
 
 A scripted press bypasses the combined input block mask, including blocks from
@@ -49,11 +51,7 @@ other loaded mods. It does not remove those blocks or change the physical input
 edges reported to watchers. Cancellation cannot retract a press already sent to
 the game. Modes must cancel pending actions when their owner leaves or dies.
 
-Image dimensions are a compiler fix. External game images retain upstream
-lookup behavior; malformed packaged textures fail compilation. This does not
-replace the asset SDK or change image pixels.
-
-Layout unload callbacks cover UI removal, layout replacement and mod reload.
+Upstream's layout unload callbacks cover UI removal, layout replacement and mod reload.
 They run while the layout's panel is still valid. A failed callback is logged
 and does not prevent the remaining callbacks. They do not run when the entire
 game process or its Panorama context is destroyed.
@@ -100,8 +98,9 @@ an id that finds nothing changes nothing and returns null, so a layout may pass
 The first owner to change a property saves the panel's current value on the
 panel itself. Every owner restores that one original: two instances of a
 layout during a reload, and the groups of any layout. The renderer's `hideHud`
-is upstream's stock guard, which hides by a panel's `visible` and its own
-mark; a visibility the guard wrote is never saved as a panel's original, so
+is upstream's stock guard, which hides by an inline collapse and records in
+its mark the value it replaced; a visibility the guard wrote is never saved as
+a panel's original, the value its mark records is, so
 prefer `hideHud` for the parts it names and `Modlock.native` for the rest.
 Changing a property again keeps the first original, so a layout may re-apply
 its changes on every sweep. A panel the game rebuilds is a new panel with its

@@ -11,6 +11,44 @@ import type {
 } from '@aptre/protobuf-es-lite/binary-encoding'
 import type { InteractionKind } from './movement/movement.pb.js'
 import { InteractionKind_Enum, MovementSample } from './movement/movement.pb.js'
+import { PlayerControllers } from './controllers/controllers.pb.js'
+
+/**
+ * PingKind is how a player pinged.
+ *
+ * @generated from enum modlock.wasm.PingKind
+ */
+export enum PingKind {
+  /**
+   * PING_KIND_MAP is a ping on a place, a unit or the minimap.
+   */
+  MAP = 0,
+
+  /**
+   * PING_KIND_WHEEL is a line from the comms wheel or a quick ping key.
+   */
+  WHEEL = 1,
+
+  /**
+   * PING_KIND_QUICK_RESPONSE answers another player's ping.
+   */
+  QUICK_RESPONSE = 2,
+
+  /**
+   * PING_KIND_ABILITY pings one of the player's abilities or items.
+   */
+  ABILITY = 3,
+}
+
+export const PingKind_Enum = /* @__PURE__ */ createEnumType(
+  'modlock.wasm.PingKind',
+  [
+    [0, 'PING_KIND_MAP'],
+    [1, 'PING_KIND_WHEEL'],
+    [2, 'PING_KIND_QUICK_RESPONSE'],
+    [3, 'PING_KIND_ABILITY'],
+  ],
+)
 
 /**
  * ServiceFailure says why a service call ended without an answer.
@@ -276,6 +314,7 @@ export interface StartResult {
   chat?: boolean
   /**
    * Joins asks for a PlayerJoined event as each player the mod serves joins,
+   * PlayerAway and PlayerReturned events as they disconnect and come back,
    * and a PlayerLeft event as each leaves.
    */
   joins?: boolean
@@ -312,6 +351,10 @@ export interface StartResult {
    * Parries asks for a Parried event after each parry that catches a swing.
    */
   parries?: boolean
+  /**
+   * Pings asks for a Ping event before each ping a player sends.
+   */
+  pings?: boolean
 }
 
 export const StartResult: MessageType<StartResult> =
@@ -330,6 +373,7 @@ export const StartResult: MessageType<StartResult> =
       [10, 'levels', 8],
       [11, 'melees', 8],
       [12, 'parries', 8],
+      [13, 'pings', 8],
     ],
     {
       decode: (r: BinaryReader, end: number, m: StartResult): StartResult => {
@@ -372,6 +416,9 @@ export const StartResult: MessageType<StartResult> =
               break
             case 12:
               m.parries = r.bool()
+              break
+            case 13:
+              m.pings = r.bool()
               break
             default:
               r.skip(t)
@@ -428,6 +475,10 @@ export const StartResult: MessageType<StartResult> =
           const v = m.parries
           if (v) w.uint32(96).bool(v)
         }
+        {
+          const v = m.pings
+          if (v) w.uint32(104).bool(v)
+        }
       },
     },
   )
@@ -457,6 +508,11 @@ export interface FrameEvent {
    * cannot find, is unknown rather than absent from the samples.
    */
   interactions?: InteractionKind[]
+  /**
+   * Controllers holds each watched player's controllers in every frame, with
+   * the presses and releases since the mod's previous frame.
+   */
+  controllers?: PlayerControllers[]
 }
 
 export const FrameEvent: MessageType<FrameEvent> =
@@ -467,6 +523,7 @@ export const FrameEvent: MessageType<FrameEvent> =
       [2, 'time_seconds', 1],
       [3, 'movement', 11, 1, MovementSample.codec],
       [4, 'interactions', 14, 3, InteractionKind_Enum],
+      [5, 'controllers', 11, 1, PlayerControllers.codec],
     ],
     {
       decode: (r: BinaryReader, end: number, m: FrameEvent): FrameEvent => {
@@ -488,6 +545,11 @@ export const FrameEvent: MessageType<FrameEvent> =
             case 4:
               for (const e = r.run(t), a = (m.interactions ??= []); r.pos < e;)
                 a.push(r.int32())
+              break
+            case 5:
+              ;(m.controllers ??= []).push(
+                PlayerControllers.decode(r, r.delimited(), {}),
+              )
               break
             default:
               r.skip(t)
@@ -515,6 +577,11 @@ export const FrameEvent: MessageType<FrameEvent> =
             for (const e of a) w.int32(e)
             w.join(s)
           }
+        }
+        {
+          const a = m.controllers
+          if (a != null)
+            for (const e of a) PlayerControllers.writeField(w, 5, e)
         }
       },
     },
@@ -652,6 +719,149 @@ export const ChatEvent: MessageType<ChatEvent> =
         {
           const v = m.lane
           if (v) w.uint32(32).int32(v)
+        }
+      },
+    },
+  )
+
+/**
+ * PingEvent carries one ping a player sent, before anyone sees it.
+ *
+ * @generated from message modlock.wasm.PingEvent
+ */
+export interface PingEvent {
+  /**
+   * Player is the player who pinged.
+   */
+  player?: number
+  /**
+   * Kind is how they pinged.
+   */
+  kind?: PingKind
+  /**
+   * Option is the comms wheel line for a wheel ping, the
+   * m_unPingWheelOptionID of the game's scripts/ping_wheel_messages.vdata,
+   * and zero for another kind.
+   */
+  option?: number
+  /**
+   * Concept is the voice line the ping speaks, a CitadelConcept_t value, or
+   * zero for none.
+   */
+  concept?: number
+}
+
+export const PingEvent: MessageType<PingEvent> =
+  /* @__PURE__ */ createMessageType<PingEvent>(
+    'modlock.wasm.PingEvent',
+    () => [
+      [1, 'player', 5],
+      [2, 'kind', 14, 0, PingKind_Enum],
+      [3, 'option', 13],
+      [4, 'concept', 5],
+    ],
+    {
+      decode: (r: BinaryReader, end: number, m: PingEvent): PingEvent => {
+        while (r.pos < end) {
+          const t = r.tag()
+          if ((t & 7) === 4) return m
+          switch (t >>> 3) {
+            case 1:
+              m.player = r.int32()
+              break
+            case 2:
+              m.kind = r.int32()
+              break
+            case 3:
+              m.option = r.uint32()
+              break
+            case 4:
+              m.concept = r.int32()
+              break
+            default:
+              r.skip(t)
+          }
+        }
+        return m
+      },
+      encode: (m: PingEvent, w: Writer): void => {
+        {
+          const v = m.player
+          if (v) w.uint32(8).int32(v)
+        }
+        {
+          const v = m.kind
+          if (v) w.uint32(16).int32(v)
+        }
+        {
+          const v = m.option
+          if (v) w.uint32(24).uint32(v)
+        }
+        {
+          const v = m.concept
+          if (v) w.uint32(32).int32(v)
+        }
+      },
+    },
+  )
+
+/**
+ * PingResult answers a Ping event.
+ *
+ * @generated from message modlock.wasm.PingResult
+ */
+export interface PingResult {
+  /**
+   * Block drops the ping for every player, the sender included: its marker,
+   * sound, voice line and chat line.
+   */
+  block?: boolean
+  /**
+   * MuteVoice lists the players, by slot, who get a ping that is not blocked
+   * without its voice line: they still see its marker and hear its sound.
+   * The other recipients get it whole.
+   */
+  muteVoice?: number[]
+}
+
+export const PingResult: MessageType<PingResult> =
+  /* @__PURE__ */ createMessageType<PingResult>(
+    'modlock.wasm.PingResult',
+    () => [
+      [1, 'block', 8],
+      [2, 'mute_voice', 5, 3],
+    ],
+    {
+      decode: (r: BinaryReader, end: number, m: PingResult): PingResult => {
+        while (r.pos < end) {
+          const t = r.tag()
+          if ((t & 7) === 4) return m
+          switch (t >>> 3) {
+            case 1:
+              m.block = r.bool()
+              break
+            case 2:
+              for (const e = r.run(t), a = (m.muteVoice ??= []); r.pos < e;)
+                a.push(r.int32())
+              break
+            default:
+              r.skip(t)
+          }
+        }
+        return m
+      },
+      encode: (m: PingResult, w: Writer): void => {
+        {
+          const v = m.block
+          if (v) w.uint32(8).bool(v)
+        }
+        {
+          const a = m.muteVoice
+          if (a != null && a.length > 0) {
+            const s = w.uint32(18).fork()
+            for (const e of a) w.int32(e)
+            w.join(s)
+          }
         }
       },
     },

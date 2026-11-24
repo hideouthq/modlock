@@ -19,9 +19,12 @@ import (
 	"github.com/aperturerobotics/controllerbus/controller"
 	"github.com/aperturerobotics/controllerbus/directive"
 	"github.com/aperturerobotics/starpc/srpc"
+	"github.com/paralin/modlock/check"
+	"github.com/paralin/modlock/controllers"
 	"github.com/paralin/modlock/gamelink"
 	"github.com/paralin/modlock/session"
 	"github.com/paralin/modlock/src/host_app/control"
+	pb "github.com/paralin/modlock/src/wasm/controllers"
 	"github.com/paralin/modlock/src/wasm/ui"
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/net/link"
@@ -91,6 +94,8 @@ type hosting struct {
 	events func(*HostEvent)
 	// sessions serves the Session service to guests.
 	sessions *srpc.Server
+	// controllers binds each guest's controllers to their slot.
+	controllers *controllers.Hub
 }
 
 // GetControllerInfo identifies the hosted session.
@@ -111,7 +116,7 @@ func (h *hosting) HandleDirective(_ context.Context, inst directive.Instance) ([
 		return nil, nil
 	}
 	switch d.HandleMountedStreamProtocolID() {
-	case GameProtocolID, SessionProtocolID:
+	case GameProtocolID, SessionProtocolID, controllers.FeedProtocolID:
 		return directive.Resolvers(directive.NewValueResolver([]link.MountedStreamHandler{h})), nil
 	default:
 		return nil, nil
@@ -123,11 +128,12 @@ func (h *hosting) HandleDirective(_ context.Context, inst directive.Instance) ([
 // session ends, closing any other stream. Each stream holds the guest's link
 // while it is served.
 func (h *hosting) HandleMountedStream(_ context.Context, mounted link.MountedStream) error {
-	// Serve a session call; the call checks the join code.
-	if mounted.GetProtocolID() == SessionProtocolID {
+	// Serve a session call, which checks the join code, or a controller feed,
+	// which feeds only the slot of the guest's own game stream.
+	if id := mounted.GetProtocolID(); id == SessionProtocolID || id == controllers.FeedProtocolID {
 		go func() {
 			defer h.holdLink(mounted.GetPeerID())()
-			h.sessions.HandleStream(h.ctx, mounted.GetStream())
+			h.sessions.HandleStream(withPeer(h.ctx, mounted.GetPeerID()), mounted.GetStream())
 		}()
 		return nil
 	}
@@ -140,6 +146,7 @@ func (h *hosting) HandleMountedStream(_ context.Context, mounted link.MountedStr
 	}
 	guest := mounted.GetPeerID().String()
 	go func() {
+		// Hold the peer's link while this game stream runs.
 		defer h.holdLink(mounted.GetPeerID())()
 
 		// Refuse a guest without the join code.
@@ -150,9 +157,15 @@ func (h *hosting) HandleMountedStream(_ context.Context, mounted link.MountedStr
 			return
 		}
 
-		// Forward the guest, reporting when it joins and leaves.
+		// Forward the guest, reporting when it joins and leaves, and binding
+		// its controllers to the slot its socket connects.
 		h.events(&HostEvent{Body: &HostEvent_Joined{Joined: guest}})
-		_ = gamelink.Forward(h.ctx, h.target, messages, func() error { return gamelink.AcceptGeneration(h.ctx, control) })
+		release := func() {}
+		_ = gamelink.Forward(h.ctx, h.target, messages, func(local *net.UDPAddr) error {
+			release = h.controllers.Forward(mounted.GetPeerID().String(), local)
+			return gamelink.AcceptGeneration(h.ctx, control)
+		})
+		release()
 		h.events(&HostEvent{Body: &HostEvent_Left{Left: guest}})
 	}()
 	return nil
@@ -200,6 +213,16 @@ func (s *Service) Host(strm SRPCPeerNet_HostStream) error {
 	// Follow the server's players, interfaces and chat until the caller
 	// stops.
 	screens, chat := session.NewScreens(0), session.NewChat()
+	events := make(chan *HostEvent, 16)
+	queue := func(event *HostEvent) {
+		select {
+		case events <- event:
+		case <-ctx.Done():
+		}
+	}
+	hub := controllers.NewHub(func(frames *pb.ControllerFrames) {
+		queue(&HostEvent{Body: &HostEvent_Controllers{Controllers: frames}})
+	})
 	manifestChanged := make(chan struct{}, 1)
 	results := make(chan *control.ServiceResult, 16)
 	go func() {
@@ -228,6 +251,7 @@ func (s *Service) Host(strm SRPCPeerNet_HostStream) error {
 			}
 			if event != nil {
 				screens.Handle(event)
+				hub.Follow(event)
 			}
 		}
 	}()
@@ -239,19 +263,15 @@ func (s *Service) Host(strm SRPCPeerNet_HostStream) error {
 	}
 	code := JoinCode{Host: s.local, Session: binary.BigEndian.Uint64(secret[:])}
 
-	// Answer guests, sending each change in order.
-	events := make(chan *HostEvent, 16)
+	// Answer guests, sending each change in order, and feed the host's own
+	// player from this PC's controllers.
 	events <- &HostEvent{Body: &HostEvent_JoinCode{JoinCode: code.String()}}
-	guests := &sessionServer{session: code.Session, mods: start.GetStart().GetMods(), screens: screens, chat: chat}
-	h, err := s.newHosting(ctx, int(port), guests, func(event *HostEvent) {
-		select {
-		case events <- event:
-		case <-ctx.Done():
-		}
-	})
+	guests := &sessionServer{session: code.Session, mods: start.GetStart().GetMods(), screens: screens, chat: chat, controllers: hub}
+	h, err := s.newHosting(ctx, int(port), guests, queue)
 	if err != nil {
 		return err
 	}
+	go controllers.FeedLocal(ctx, hub)
 	release, err := s.node.GetBus().AddController(ctx, h, nil)
 	if err != nil {
 		return err
@@ -295,14 +315,18 @@ func (s *Service) newHosting(ctx context.Context, port int, guests *sessionServe
 	if err := SRPCRegisterSession(mux, guests); err != nil {
 		return nil, err
 	}
+	if err := controllers.SRPCRegisterControllerFeed(mux, &feedServer{hub: guests.controllers}); err != nil {
+		return nil, err
+	}
 	return &hosting{
-		ctx:      ctx,
-		bus:      s.node.GetBus(),
-		local:    s.local,
-		session:  guests.session,
-		target:   &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port},
-		events:   events,
-		sessions: srpc.NewServer(mux),
+		ctx:         ctx,
+		bus:         s.node.GetBus(),
+		local:       s.local,
+		session:     guests.session,
+		target:      &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port},
+		events:      events,
+		sessions:    srpc.NewServer(mux),
+		controllers: guests.controllers,
 	}, nil
 }
 
@@ -316,6 +340,8 @@ type sessionServer struct {
 	screens *session.Screens
 	// chat holds the newest lines said.
 	chat *session.Chat
+	// controllers binds each guest's controllers to their slot.
+	controllers *controllers.Hub
 }
 
 // Watch streams what the guest sees: whether they are in the server and the
@@ -442,9 +468,14 @@ func (s *Service) Join(req *JoinRequest, strm SRPCPeerNet_JoinStream) error {
 
 	// Send the mods' content, then the address, so the game mounts the
 	// content before it starts. Without the content the game still plays a
-	// stock map, drawing the mods' resources as errors.
+	// stock map, drawing the mods' resources as errors, but a host that sends
+	// a file outside an addon ends the join.
 	host := NewSRPCSessionClient(srpc.NewClient(stream_srpc.NewOpenStreamFunc(s.node.GetBus(), SessionProtocolID, s.local, code.Host, 0)))
-	if files, err := FetchContent(ctx, host, code.Session, nil); err == nil {
+	files, err := FetchContent(ctx, host, code.Session, nil)
+	switch {
+	case errors.Is(err, errContentName):
+		return err
+	case err == nil:
 		err = sendContent(files, func(part *ContentPart) error {
 			return send(&JoinEvent{Body: &JoinEvent_Content{Content: part}})
 		})
@@ -462,6 +493,11 @@ func (s *Service) Join(req *JoinRequest, strm SRPCPeerNet_JoinStream) error {
 		defer cancel()
 		go s.watch(watch, host, &WatchRequest{Session: code.Session, SteamId: req.GetSteamId()}, send)
 	}
+
+	// Feed the player's controllers while the host's mods watch them.
+	feed, stopFeed := context.WithCancel(ctx)
+	defer stopFeed()
+	go controllers.FeedHost(feed, controllers.NewSRPCControllerFeedClient(srpc.NewClient(stream_srpc.NewOpenStreamFunc(s.node.GetBus(), controllers.FeedProtocolID, s.local, code.Host, 0))))
 
 	// Report the game's arrival, then hold until it leaves.
 	select {
@@ -482,12 +518,18 @@ func (s *Service) Join(req *JoinRequest, strm SRPCPeerNet_JoinStream) error {
 // while a large map that keeps arriving takes as long as it needs.
 const contentQuiet = time.Minute
 
+// errContentName reports content from a host with a file name
+// check.ContentName refuses.
+var errContentName = errors.New("the host's content has a file outside an addon")
+
 // FetchContent returns the content addons of the session the host serves, as
 // session.ReadContent read them on the host: each mod's compiled Panorama
 // content and assets, and the archive of each map a mod ships, as
 // maps/<map>.vpk. It returns every file or an error, never part of one, since
-// a partial file breaks the package. progress, when set, receives the bytes
-// received so far after each part.
+// a partial file breaks the package, and refuses the whole content at the
+// first name check.ContentName refuses, since the host is anyone who handed
+// out a join code. progress, when set, receives the bytes received so far
+// after each part.
 func FetchContent(ctx context.Context, host SRPCSessionClient, session uint64, progress func(uint64)) (fstest.MapFS, error) {
 	// Fail the fetch when the host stays quiet past contentQuiet.
 	ctx, cancel := context.WithCancel(ctx)
@@ -516,6 +558,9 @@ func FetchContent(ctx context.Context, host SRPCSessionClient, session uint64, p
 		quiet.Reset(contentQuiet)
 		file := files[part.GetPath()]
 		if file == nil {
+			if _, err := check.ContentName(part.GetPath()); err != nil {
+				return nil, errors.Wrap(errContentName, err.Error())
+			}
 			file = &fstest.MapFile{Mode: 0o644}
 			files[part.GetPath()] = file
 		}

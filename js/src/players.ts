@@ -6,7 +6,7 @@ import {
   PlayersResponse,
 } from '../../src/wasm/players/players.pb.js'
 import { type Connection, type ModRole, Player } from './host.gen.js'
-import { call } from './host.js'
+import { callRead } from './host.js'
 
 /** roster is the player list the host last reported, if any. */
 let roster: Connection[] | undefined = undefined
@@ -85,7 +85,7 @@ export function connection(
  */
 export function players(): Connection[] {
   if (roster !== undefined) return roster.slice()
-  const reply = call('Players', new Uint8Array())
+  const reply = callRead('Players', new Uint8Array())
   if (reply === undefined) return []
   return adopt(
     (PlayersResponse.fromBinary(reply).players ?? []).map((c) => ({
@@ -95,6 +95,7 @@ export function players(): Connection[] {
       bot: c.bot ?? false,
       ready: c.ready ?? false,
       generation: c.generation ?? 0,
+      away: c.away ?? false,
       roles: (c.roles ?? []).flatMap((role) => roleNames[role] ?? []),
     })),
   )

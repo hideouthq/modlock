@@ -21,6 +21,7 @@ import math
 import random
 import sys
 import traceback
+from collections.abc import Sequence
 
 from .heroes import HEROES as HEROES
 from .heroes import Hero as Hero
@@ -56,6 +57,11 @@ class Buttons(enum.IntFlag):
     ABILITY3 = 1 << 35
     # ULTIMATE is the hero's ultimate ability key, the fourth.
     ULTIMATE = 1 << 36
+    # ITEM1 to ITEM4 are the hero's four active item keys.
+    ITEM1 = 1 << 37
+    ITEM2 = 1 << 38
+    ITEM3 = 1 << 39
+    ITEM4 = 1 << 40
     # PARRY is the melee parry button.
     PARRY = 1 << 42
     # SPEC_NEXT to SPEC_TOGGLE_TEAM are the buttons a player's client sends in
@@ -108,12 +114,15 @@ _frames: list[Callable[[FrameEvent], object]] = []
 _chats: list[Callable[[ChatEvent], object]] = []
 _joins: list[Callable[[PlayerJoinedEvent], object]] = []
 _leaves: list[Callable[[PlayerLeftEvent], object]] = []
+_aways: list[Callable[[PlayerAwayEvent], object]] = []
+_returns: list[Callable[[PlayerReturnedEvent], object]] = []
 _worlds: list[Callable[[str], object]] = []
 _inputs: list[Callable[[Player, Buttons, Buttons], object]] = []
 _restoreds: list[Callable[[Player, str | None], object]] = []
 _npcs_restoreds: list[Callable[[str | None], object]] = []
 _damages: list[Callable[[DamageEvent], DamageResult | None]] = []
 _damageds: list[Callable[[DamagedEvent], object]] = []
+_pings: list[Callable[[PingEvent], PingResult | None]] = []
 _kills: list[Callable[[KillEvent], object]] = []
 _ability_casts: list[Callable[[AbilityCastEvent], object]] = []
 _heals: list[Callable[[HealEvent], object]] = []
@@ -607,8 +616,18 @@ class MatchPlace:
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class BoardMember:
+    """BoardMember is one player of a team's row."""
+
+    steam_id: int
+    name: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class BoardRow:
-    """BoardRow is one player's place on a board."""
+    """BoardRow is one player's place on a board, or a team's on a board that
+    ranks teams: its members then, ordered by SteamID64, with steam_id and
+    name the first member's."""
 
     rank: int
     steam_id: int
@@ -616,6 +635,7 @@ class BoardRow:
     value: int
     tiebreak: int
     count: int
+    members: list[BoardMember]
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -639,8 +659,13 @@ def report_score(
     key: str | None = None,
     earned_at: float = 0,
     evidence: str | None = None,
+    teammates: Sequence[ScorePlayer] = (),
 ) -> None:
-    """report_score reports an enrolled player's result and answers on a later frame."""
+    """report_score reports an enrolled player's result and answers on a later frame.
+
+    teammates are the scoring player's teammates on a board that ranks teams,
+    each enrolled with bind_score_player: the board's team size less one.
+    """
     report = wire.encode(
         _SCHEMA,
         "ScoreReport",
@@ -654,6 +679,10 @@ def report_score(
             "key": key,
             "earned_at_unix_millis": _int64(earned_at),
             "evidence": evidence,
+            "teammates": [
+                {"player": Player(teammate.slot), "connection": dataclasses.asdict(teammate)}
+                for teammate in teammates
+            ],
         },
     )
     call_service_later(_SCORES, "Report", report, lambda _, err, __: done(err))
@@ -698,8 +727,13 @@ def read_board(
     offset: int = 0,
     limit: int = 0,
     player: Connection | None = None,
+    teammates: Sequence[Connection] = (),
 ) -> None:
-    """read_board reads a page and the optional connected viewer's row on a later frame."""
+    """read_board reads a page and the optional connected viewer's row on a later frame.
+
+    teammates name the player's teammates on a board that ranks teams, so the
+    page's player row is their team's; each is in the game now.
+    """
     query = wire.encode(
         _SCHEMA,
         "BoardQuery",
@@ -707,6 +741,10 @@ def read_board(
             "board": board, "partition": partition, "window": window, "offset": offset, "limit": limit,
             "player": player.player if player is not None else None,
             "connection": _score_identity(player) if player is not None else None,
+            "teammates": [
+                {"player": teammate.player, "connection": _score_identity(teammate)}
+                for teammate in teammates
+            ],
         },
     )
 
@@ -718,13 +756,19 @@ def read_board(
         standing = page["player"]
         done(
             BoardPage(
-                rows=[BoardRow(**row) for row in page["rows"]],
-                player=BoardRow(**standing) if standing is not None else None,
+                rows=[_board_row(row) for row in page["rows"]],
+                player=_board_row(standing) if standing is not None else None,
             ),
             None,
         )
 
     call_service_later(_SCORES, "Read", query, finish)
+
+
+def _board_row(standing: dict[str, Any]) -> BoardRow:
+    """_board_row converts a decoded standing to its row."""
+    members = [BoardMember(**member) for member in standing.pop("members")]
+    return BoardRow(**standing, members=members)
 
 
 def _int64(value: float) -> int:
@@ -767,7 +811,7 @@ def command[F: Callable[[Player, str], object]](name: str) -> Callable[[F], F]:
 
 def on_start[F: Callable[[list[str]], object]](handler: F) -> F:
     """on_start calls handler once when the server starts the mod, with the
-    arguments that follow -- on the modlock-host command line.
+    words after -- on the modlock dev or play command line.
 
     Annotate the handler's parameters, since a checker and an editor's
     completion read their types from there:
@@ -1010,6 +1054,24 @@ def on_damage[F: Callable[[DamageEvent], DamageResult | None]](handler: F) -> F:
     return handler
 
 
+def on_ping[F: Callable[[PingEvent], PingResult | None]](handler: F) -> F:
+    """on_ping calls handler with each ping a player sends, from the comms
+    wheel, a quick ping key, the map or an ability, before anyone sees it,
+    so it can block the ping or mute its voice line. A blocked ping reaches
+    nobody, the sender included; the players a handler lists in mute_voice,
+    by slot, get it without its voice line. The handler runs inside the
+    server's ping, so it decides at once and defers other work to a frame.
+
+    Annotate the handler's parameters, since a checker and an editor's
+    completion read their types from there:
+
+        @modlock.on_ping
+        def ping(ping: modlock.PingEvent) -> modlock.PingResult | None: ...
+    """
+    _pings.append(handler)
+    return handler
+
+
 def on_chat[F: Callable[[ChatEvent], object]](handler: F) -> F:
     """on_chat calls handler with each chat line a player writes, commands
     included, on the next server frame.
@@ -1039,11 +1101,41 @@ def on_player_join[F: Callable[[PlayerJoinedEvent], object]](handler: F) -> F:
     return handler
 
 
+def on_player_away[F: Callable[[PlayerAwayEvent], object]](handler: F) -> F:
+    """on_player_away calls handler once each time a joined human's client
+    disconnects while the server holds their seat. They have not left: their
+    hero and controller stay in the game, and on_player_return follows if
+    they come back, so keep their seat as it stands rather than clear it.
+
+        @modlock.on_player_away
+        def away(away: modlock.PlayerAwayEvent) -> None: ...
+    """
+    _aways.append(handler)
+    return handler
+
+
+def on_player_return[F: Callable[[PlayerReturnedEvent], object]](handler: F) -> F:
+    """on_player_return calls handler once each time an away player
+    reconnects to their seat and finishes joining again, with the same
+    Player, generation and hero they left.
+
+        @modlock.on_player_return
+        def back(returned: modlock.PlayerReturnedEvent) -> None: ...
+    """
+    _returns.append(handler)
+    return handler
+
+
 def on_player_leave[F: Callable[[PlayerLeftEvent], object]](handler: F) -> F:
     """on_player_leave calls handler once for each joined player who leaves
-    the mod, with the reason the server dropped them when it gave one. A
-    player who disconnects still has their slot and hero during the call. A
-    player the mod stops serving leaves too, with disconnected false.
+    the mod, with the reason the server dropped them when it gave one. A seat
+    ends, and its player leaves, when a bot is removed, a human is kicked or
+    released by the program that runs the host, or a human stays away past
+    the game's limit; a human who only disconnects is away first. The slot
+    and hero still read during the call, and afterwards Modlock kills the
+    hero, keeps it down and takes the controller off its team, so the mod
+    need not clear them. A player the mod stops serving leaves too, with
+    disconnected false.
 
     Annotate the handler's parameters, since a checker and an editor's
     completion read their types from there:
@@ -1259,13 +1351,14 @@ def _start(event: StartEvent) -> StartResult:
         damage=bool(_damages),
         damaged=bool(_damageds),
         chat=bool(_chats),
-        joins=bool(_joins or _leaves),
+        joins=bool(_joins or _leaves or _aways or _returns),
         casts=bool(_ability_casts),
         kills=bool(_kills),
         heals=bool(_heals),
         levels=bool(_levels),
         melees=bool(_melees),
         parries=bool(_parries),
+        pings=bool(_pings),
         modifier_events=list(
             _modifier_events.keys() | ({_RESPAWNED} if _spawns else set())
         ),
@@ -1333,6 +1426,20 @@ def _chat(event: ChatEvent) -> None:
             handler(event)
 
     after(0, run)
+
+
+def _ping(event: PingEvent) -> PingResult:
+    # The first handler that blocks the ping ends its dispatch; the others
+    # add the players they mute its voice line for.
+    mute_voice: dict[int, None] = {}
+    for handler in _pings:
+        result = handler(event)
+        if result is None:
+            continue
+        if result.block:
+            return PingResult(block=True)
+        mute_voice.update(dict.fromkeys(result.mute_voice))
+    return PingResult(block=False, mute_voice=list(mute_voice))
 
 
 def _world(event: WorldEvent) -> None:
@@ -1537,6 +1644,16 @@ def _player_joined(event: PlayerJoinedEvent) -> None:
         handler(event)
 
 
+def _player_away(event: PlayerAwayEvent) -> None:
+    for handler in _aways:
+        handler(event)
+
+
+def _player_returned(event: PlayerReturnedEvent) -> None:
+    for handler in _returns:
+        handler(event)
+
+
 def _player_left(event: PlayerLeftEvent) -> None:
     for handler in _leaves:
         handler(event)
@@ -1548,6 +1665,7 @@ _HANDLERS: dict[str, Callable[[Any], Any]] = {
     "frame": _frame,
     "command": _command,
     "chat": _chat,
+    "ping": _ping,
     "world": _world,
     "ui_press": _ui_press,
     "ui_input": _ui_input,
@@ -1571,6 +1689,8 @@ _HANDLERS: dict[str, Callable[[Any], Any]] = {
     "setting_changed": _setting_changed,
     "players_changed": _players_changed,
     "player_joined": _player_joined,
+    "player_away": _player_away,
+    "player_returned": _player_returned,
     "player_left": _player_left,
 }
 

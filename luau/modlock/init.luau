@@ -126,6 +126,60 @@ local Definition_File: { [any]: any } = {
 	fileModifiers = 4,
 }
 
+-- ControllerStream is the state of the stream that brings one player's
+-- controllers to the host, as a mod reads it.
+export type ControllerStream = "none" | "live" | "unfocused" | "stale"
+local ControllerStream: { [any]: any } = {
+	[1] = "none",
+	none = 1,
+	[2] = "live",
+	live = 2,
+	[3] = "unfocused",
+	unfocused = 3,
+	[4] = "stale",
+	stale = 4,
+}
+
+-- GamepadButton names one button of the gamepad layout, by position as SDL
+-- names them: South is A on an Xbox controller and Cross on a PlayStation one.
+export type GamepadButton = "south" | "east" | "west" | "north" | "back" | "guide" | "start" | "leftStick" | "rightStick" | "leftShoulder" | "rightShoulder" | "dpadUp" | "dpadDown" | "dpadLeft" | "dpadRight" | "misc" | "touchpad"
+local GamepadButton: { [any]: any } = {
+	[1] = "south",
+	south = 1,
+	[2] = "east",
+	east = 2,
+	[3] = "west",
+	west = 3,
+	[4] = "north",
+	north = 4,
+	[5] = "back",
+	back = 5,
+	[6] = "guide",
+	guide = 6,
+	[7] = "start",
+	start = 7,
+	[8] = "leftStick",
+	leftStick = 8,
+	[9] = "rightStick",
+	rightStick = 9,
+	[10] = "leftShoulder",
+	leftShoulder = 10,
+	[11] = "rightShoulder",
+	rightShoulder = 11,
+	[12] = "dpadUp",
+	dpadUp = 12,
+	[13] = "dpadDown",
+	dpadDown = 13,
+	[14] = "dpadLeft",
+	dpadLeft = 14,
+	[15] = "dpadRight",
+	dpadRight = 15,
+	[16] = "misc",
+	misc = 16,
+	[17] = "touchpad",
+	touchpad = 17,
+}
+
 -- MovementAction is a movement fact the game announced for a hero.
 export type MovementAction = "landed" | "ziplineAttached" | "groundDash" | "slide" | "bouncePad" | "dashJump" | "airJump" | "wallJump" | "airDash" | "meleeStarted" | "abilityExecuted"
 local MovementAction: { [any]: any } = {
@@ -471,6 +525,19 @@ local CameraParam: { [any]: any } = {
 	verticalOffset = 3,
 	[4] = "horizontalOffset",
 	horizontalOffset = 4,
+}
+
+-- PingKind is how a player pinged.
+export type PingKind = "map" | "wheel" | "quickResponse" | "ability"
+local PingKind: { [any]: any } = {
+	[0] = "map",
+	map = 0,
+	[1] = "wheel",
+	wheel = 1,
+	[2] = "quickResponse",
+	quickResponse = 2,
+	[3] = "ability",
+	ability = 3,
 }
 
 -- ServiceFailure says why a service call ended without an answer.
@@ -1008,6 +1075,91 @@ export type DefinitionFieldOptions = {
 	field: string,
 }
 
+-- ControllerInfo describes one device a client reads.
+export type ControllerInfo = {
+	-- id identifies the device within its stream for as long as it stays
+	-- attached. A device plugged in again gets a new id.
+	id: number,
+	-- name is the device's name, such as "Xbox Series X Controller".
+	name: string,
+	-- guid is SDL's joystick GUID in hexadecimal, which identifies the model
+	-- and the way it is attached.
+	guid: string,
+	-- vendor and product are the USB vendor and product IDs, or zero when the
+	-- device does not report them.
+	vendor: number,
+	product: number,
+	-- axes, buttons and hats count the device's raw inputs, which State's
+	-- lists follow.
+	axes: number,
+	buttons: number,
+	hats: number,
+	-- gamepad is true when SDL knows the device's gamepad layout, so State
+	-- carries the gamepad layer.
+	gamepad: boolean,
+}
+
+-- Gamepad is a device's gamepad layer, with named sticks, triggers and
+-- buttons, for a device whose layout SDL knows.
+export type Gamepad = {
+	-- leftX, leftY, rightX and rightY are the sticks, from -1 to 1, with x
+	-- positive to the right and y positive down, as SDL reports them.
+	leftX: number,
+	leftY: number,
+	rightX: number,
+	rightY: number,
+	-- leftTrigger and rightTrigger run from 0 at rest to 1 fully pulled.
+	leftTrigger: number,
+	rightTrigger: number,
+	-- held lists the buttons held now.
+	held: { GamepadButton },
+	-- pressed and released list the buttons pressed and released since the
+	-- previous state, once for each press, so a tap shorter than a server frame
+	-- is listed in both.
+	pressed: { GamepadButton },
+	released: { GamepadButton },
+}
+
+-- ControllerState is one device's inputs, the raw joystick layer always and
+-- the gamepad layer when SDL knows the device.
+export type ControllerState = {
+	-- id is the device's id in ControllerInfo.
+	id: number,
+	-- axes holds each raw axis from -1 to 1, in the device's order. A radio
+	-- transmitter's channels are its axes.
+	axes: { number },
+	-- buttons holds whether each raw button is held, in the device's order.
+	buttons: { boolean },
+	-- hats holds each hat's position as SDL's mask: 1 up, 2 right, 4 down and
+	-- 8 left, combined on a diagonal, and 0 centered.
+	hats: { number },
+	-- pressed and released list the raw buttons, by index, pressed and
+	-- released since the previous state, once for each press.
+	pressed: { number },
+	released: { number },
+	-- gamepad is the gamepad layer, when the device has one.
+	gamepad: Gamepad,
+}
+
+-- Controller is one device as a mod reads it.
+export type Controller = {
+	-- info describes the device.
+	info: ControllerInfo,
+	-- state is its inputs now, with the presses and releases since the mod's
+	-- previous frame.
+	state: ControllerState,
+}
+
+-- PlayerControllers is one watched player's controllers in a frame.
+export type PlayerControllers = {
+	-- player is the player's slot.
+	player: Player,
+	-- stream is the state of the stream that brings them.
+	stream: ControllerStream?,
+	-- controllers lists the player's devices, empty while stream is none.
+	controllers: { Controller },
+}
+
 -- MovementSample is one watched hero's movement on one tick, as the game keeps
 -- it. A hero whose position, velocity or ground the game does not provide has
 -- no sample; another field the game did not provide is absent or zero.
@@ -1328,7 +1480,8 @@ export type RestoredEvent = {
 	error: string,
 }
 
--- PlayersChangedEvent holds every occupied player slot, as Players lists them.
+-- PlayersChangedEvent holds every player slot with a seat, connected or
+-- away, as Players lists them.
 export type PlayersChangedEvent = {
 	players: { Connection },
 }
@@ -1338,6 +1491,22 @@ export type PlayersChangedEvent = {
 -- the mod starts or begins to serve them.
 export type PlayerJoinedEvent = {
 	-- connection is the player as Players lists them.
+	connection: Connection,
+}
+
+-- PlayerAwayEvent reports a joined player whose client disconnected while the
+-- server holds their seat. Their controller and hero stay in the game, and the
+-- player may return to them.
+export type PlayerAwayEvent = {
+	-- connection is the player as Players lists them, away.
+	connection: Connection,
+}
+
+-- PlayerReturnedEvent reports an away player who reconnected to their seat
+-- and finished joining again. The seat, its generation and its hero are the
+-- ones they left.
+export type PlayerReturnedEvent = {
+	-- connection is the player as Players lists them, ready again.
 	connection: Connection,
 }
 
@@ -1366,14 +1535,26 @@ export type Connection = {
 	-- bot is true for a bot player.
 	bot: boolean,
 	-- ready is true once a human has finished joining; bots are always ready.
+	-- An away player is not ready.
 	ready: boolean,
-	-- generation changes each time a new connection takes the slot.
+	-- generation identifies the seat: it changes when a new player or bot takes
+	-- the slot, and stays the same when an away player returns.
 	generation: number,
 	-- roles are what the player is to the running mods, as the program that
 	-- runs the host grants them. A role decides what a mod shows, such as an
 	-- unfinished feature for its testers; the platform that keeps a mod's
 	-- shared data checks its own writers.
 	roles: { ModRole },
+	-- away is true while the player's client is disconnected and the server
+	-- holds their seat for them to return.
+	away: boolean,
+}
+
+-- PlayerPawn is one player's pawn.
+export type PlayerPawn = {
+	-- player is the player's server slot.
+	player: Player,
+	pawn: Pawn,
 }
 
 -- Pawn is one player's pawn this frame: their hero, or the game's placeholder
@@ -1682,6 +1863,7 @@ export type StartResult = {
 	-- chat asks for a chat event for each chat line.
 	chat: boolean,
 	-- joins asks for a PlayerJoined event as each player the mod serves joins,
+	-- PlayerAway and PlayerReturned events as they disconnect and come back,
 	-- and a PlayerLeft event as each leaves.
 	joins: boolean,
 	-- casts asks for an AbilityCast event after each ability the game
@@ -1703,6 +1885,8 @@ export type StartResult = {
 	melees: boolean,
 	-- parries asks for a Parried event after each parry that catches a swing.
 	parries: boolean,
+	-- pings asks for a Ping event before each ping a player sends.
+	pings: boolean,
 }
 
 -- FrameEvent identifies one server frame.
@@ -1718,6 +1902,9 @@ export type FrameEvent = {
 	-- movement. A kind it lacks, such as on a game build whose completion it
 	-- cannot find, is unknown rather than absent from the samples.
 	interactions: { InteractionKind },
+	-- controllers holds each watched player's controllers in every frame, with
+	-- the presses and releases since the mod's previous frame.
+	controllers: { PlayerControllers },
 }
 
 -- CommandEvent carries one command line from a player: a chat line that
@@ -1743,6 +1930,32 @@ export type ChatEvent = {
 	-- lane is the CMsgLaneColor of the lane the line pings: 1 yellow, 3
 	-- green, 4 blue, 6 purple, or 0 for none.
 	lane: number,
+}
+
+-- PingEvent carries one ping a player sent, before anyone sees it.
+export type PingEvent = {
+	-- player is the player who pinged.
+	player: Player,
+	-- kind is how they pinged.
+	kind: PingKind?,
+	-- option is the comms wheel line for a wheel ping, the
+	-- m_unPingWheelOptionID of the game's scripts/ping_wheel_messages.vdata,
+	-- and zero for another kind.
+	option: number,
+	-- concept is the voice line the ping speaks, a CitadelConcept_t value, or
+	-- zero for none.
+	concept: number,
+}
+
+-- PingResult answers a Ping event.
+export type PingResult = {
+	-- block drops the ping for every player, the sender included: its marker,
+	-- sound, voice line and chat line.
+	block: boolean,
+	-- muteVoice lists the players, by slot, who get a ping that is not blocked
+	-- without its voice line: they still see its marker and hear its sound.
+	-- The other recipients get it whole.
+	muteVoice: { number }?,
 }
 
 -- CommandResult answers whether the mod handled a command.
@@ -1930,7 +2143,7 @@ export type Player = {
 	-- hero with no expiry, giving it back whenever the game removes it or the
 	-- hero returns. Every hero that gains the modifier from the same ability
 	-- keeps it until the hold ends. Releasing leaves the hero's current
-	-- modifier until it dies.
+	-- modifier until it dies; the mod stopping removes it.
 	holdModifier: (self: Player, modifier: string, active: boolean?) -> boolean,
 	-- giveModifier gives the hero a modifier for seconds. An ability's
 	-- modifier, named "<ability>/<modifier>", comes as if the hero's own
@@ -2027,6 +2240,11 @@ export type Player = {
 	-- watchMovement adds a player's hero to the movement samples of each Frame
 	-- event on a new tick, or removes it.
 	watchMovement: (self: Player, watch: boolean) -> boolean,
+	-- watchControllers adds a player's controllers to the controller lists of
+	-- each Frame event, or removes them. The player's client reads the devices
+	-- only while some mod watches them, and until it answers the player is
+	-- listed with no stream.
+	watchControllers: (self: Player, watch: boolean) -> boolean,
 	-- connection returns the player's connection: their name, Steam ID, whether
 	-- they are a bot and whether they finished joining. It returns nil when
 	-- nobody holds the slot.
@@ -2303,7 +2521,7 @@ end
 -- hero with no expiry, giving it back whenever the game removes it or the
 -- hero returns. Every hero that gains the modifier from the same ability
 -- keeps it until the hold ends. Releasing leaves the hero's current
--- modifier until it dies.
+-- modifier until it dies; the mod stopping removes it.
 function Player.holdModifier(self: Player, modifier: string, active: boolean?): boolean
 	return call("HoldModifier", "HoldModifierRequest", { player = self, modifier = modifier, active = active }) ~= nil
 end
@@ -2481,6 +2699,14 @@ end
 -- event on a new tick, or removes it.
 function Player.watchMovement(self: Player, watch: boolean): boolean
 	return call("WatchMovement", "WatchMovementRequest", { player = self, watch = watch }) ~= nil
+end
+
+-- watchControllers adds a player's controllers to the controller lists of
+-- each Frame event, or removes them. The player's client reads the devices
+-- only while some mod watches them, and until it answers the player is
+-- listed with no stream.
+function Player.watchControllers(self: Player, watch: boolean): boolean
+	return call("WatchControllers", "WatchControllersRequest", { player = self, watch = watch }) ~= nil
 end
 
 modlock.Player = Player
@@ -3450,6 +3676,10 @@ schema.ScoreConnection = {
 	{ number = 3, name = "generation", kind = "uint32" },
 	{ number = 4, name = "proof", kind = "string" },
 }
+schema.Teammate = {
+	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
+	{ number = 2, name = "connection", kind = "message", optional = true, message = "ScoreConnection" },
+}
 schema.ScoreReport = {
 	{ number = 1, name = "board", kind = "string" },
 	{ number = 2, name = "player", kind = "int32", class = Player, key = "slot" },
@@ -3460,6 +3690,7 @@ schema.ScoreReport = {
 	{ number = 7, name = "earnedAtUnixMillis", kind = "int64" },
 	{ number = 8, name = "evidence", kind = "string" },
 	{ number = 9, name = "connection", kind = "message", optional = true, message = "ScoreConnection" },
+	{ number = 10, name = "teammates", kind = "message", repeated = true, message = "Teammate" },
 }
 schema.ScoreReport_PartitionEntry = {
 	{ number = 1, name = "key", kind = "string" },
@@ -3491,6 +3722,7 @@ schema.BoardQuery = {
 	{ number = 5, name = "limit", kind = "uint32" },
 	{ number = 6, name = "player", kind = "int32", optional = true, class = Player, key = "slot" },
 	{ number = 7, name = "connection", kind = "message", optional = true, message = "ScoreConnection" },
+	{ number = 8, name = "teammates", kind = "message", repeated = true, message = "Teammate" },
 }
 schema.BoardQuery_PartitionEntry = {
 	{ number = 1, name = "key", kind = "string" },
@@ -3507,6 +3739,11 @@ schema.Standing = {
 	{ number = 4, name = "value", kind = "int64" },
 	{ number = 5, name = "tiebreak", kind = "int64" },
 	{ number = 6, name = "count", kind = "uint32" },
+	{ number = 7, name = "members", kind = "message", repeated = true, message = "Member" },
+}
+schema.Member = {
+	{ number = 1, name = "steamId", kind = "uint64", id = true },
+	{ number = 2, name = "name", kind = "string" },
 }
 schema.SettingChangedEvent = {
 	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
@@ -3532,6 +3769,50 @@ schema.DefinitionFieldOptions = {
 }
 schema.DefinitionFieldResponse = {
 	{ number = 1, name = "value", kind = "float" },
+}
+schema.ControllerInfo = {
+	{ number = 1, name = "id", kind = "uint32" },
+	{ number = 2, name = "name", kind = "string" },
+	{ number = 3, name = "guid", kind = "string" },
+	{ number = 4, name = "vendor", kind = "uint32" },
+	{ number = 5, name = "product", kind = "uint32" },
+	{ number = 6, name = "axes", kind = "uint32" },
+	{ number = 7, name = "buttons", kind = "uint32" },
+	{ number = 8, name = "hats", kind = "uint32" },
+	{ number = 9, name = "gamepad", kind = "bool" },
+}
+schema.Gamepad = {
+	{ number = 1, name = "leftX", kind = "float" },
+	{ number = 2, name = "leftY", kind = "float" },
+	{ number = 3, name = "rightX", kind = "float" },
+	{ number = 4, name = "rightY", kind = "float" },
+	{ number = 5, name = "leftTrigger", kind = "float" },
+	{ number = 6, name = "rightTrigger", kind = "float" },
+	{ number = 7, name = "held", kind = "enum", repeated = true, enum = GamepadButton },
+	{ number = 8, name = "pressed", kind = "enum", repeated = true, enum = GamepadButton },
+	{ number = 9, name = "released", kind = "enum", repeated = true, enum = GamepadButton },
+}
+schema.ControllerState = {
+	{ number = 1, name = "id", kind = "uint32" },
+	{ number = 2, name = "axes", kind = "float", repeated = true },
+	{ number = 3, name = "buttons", kind = "bool", repeated = true },
+	{ number = 4, name = "hats", kind = "uint32", repeated = true },
+	{ number = 5, name = "pressed", kind = "uint32", repeated = true },
+	{ number = 6, name = "released", kind = "uint32", repeated = true },
+	{ number = 7, name = "gamepad", kind = "message", message = "Gamepad" },
+}
+schema.Controller = {
+	{ number = 1, name = "info", kind = "message", message = "ControllerInfo" },
+	{ number = 2, name = "state", kind = "message", message = "ControllerState" },
+}
+schema.PlayerControllers = {
+	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
+	{ number = 2, name = "stream", kind = "enum", enum = ControllerStream },
+	{ number = 3, name = "controllers", kind = "message", repeated = true, message = "Controller" },
+}
+schema.WatchControllersRequest = {
+	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
+	{ number = 2, name = "watch", kind = "bool" },
 }
 schema.MovementSample = {
 	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
@@ -3762,6 +4043,12 @@ schema.PlayersChangedEvent = {
 schema.PlayerJoinedEvent = {
 	{ number = 1, name = "connection", kind = "message", message = "Connection" },
 }
+schema.PlayerAwayEvent = {
+	{ number = 1, name = "connection", kind = "message", message = "Connection" },
+}
+schema.PlayerReturnedEvent = {
+	{ number = 1, name = "connection", kind = "message", message = "Connection" },
+}
 schema.PlayerLeftEvent = {
 	{ number = 1, name = "connection", kind = "message", message = "Connection" },
 	{ number = 2, name = "disconnected", kind = "bool" },
@@ -3778,9 +4065,17 @@ schema.Connection = {
 	{ number = 5, name = "ready", kind = "bool" },
 	{ number = 6, name = "generation", kind = "uint32" },
 	{ number = 7, name = "roles", kind = "enum", repeated = true, enum = ModRole },
+	{ number = 8, name = "away", kind = "bool" },
 }
 schema.PawnResponse = {
 	{ number = 1, name = "pawn", kind = "message", optional = true, message = "Pawn" },
+}
+schema.PawnsResponse = {
+	{ number = 1, name = "pawns", kind = "message", repeated = true, message = "PlayerPawn" },
+}
+schema.PlayerPawn = {
+	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
+	{ number = 2, name = "pawn", kind = "message", message = "Pawn" },
 }
 schema.Pawn = {
 	{ number = 1, name = "entity", kind = "uint32" },
@@ -4229,12 +4524,14 @@ schema.StartResult = {
 	{ number = 10, name = "levels", kind = "bool" },
 	{ number = 11, name = "melees", kind = "bool" },
 	{ number = 12, name = "parries", kind = "bool" },
+	{ number = 13, name = "pings", kind = "bool" },
 }
 schema.FrameEvent = {
 	{ number = 1, name = "tick", kind = "uint64" },
 	{ number = 2, name = "timeSeconds", kind = "double" },
 	{ number = 3, name = "movement", kind = "message", repeated = true, message = "MovementSample" },
 	{ number = 4, name = "interactions", kind = "enum", repeated = true, enum = InteractionKind },
+	{ number = 5, name = "controllers", kind = "message", repeated = true, message = "PlayerControllers" },
 }
 schema.CommandEvent = {
 	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
@@ -4245,6 +4542,16 @@ schema.ChatEvent = {
 	{ number = 2, name = "text", kind = "string" },
 	{ number = 3, name = "all", kind = "bool" },
 	{ number = 4, name = "lane", kind = "int32" },
+}
+schema.PingEvent = {
+	{ number = 1, name = "player", kind = "int32", class = Player, key = "slot" },
+	{ number = 2, name = "kind", kind = "enum", enum = PingKind },
+	{ number = 3, name = "option", kind = "uint32" },
+	{ number = 4, name = "concept", kind = "int32" },
+}
+schema.PingResult = {
+	{ number = 1, name = "block", kind = "bool" },
+	{ number = 2, name = "muteVoice", kind = "int32", repeated = true },
 }
 schema.CommandResult = {
 	{ number = 1, name = "claimed", kind = "bool" },
@@ -4317,6 +4624,18 @@ end
 -- hero whose abilities ReplaceAbility gives, with their particles.
 function modlock.precache(options: PrecacheOptions): boolean
 	return call("Precache", "PrecacheOptions", options) ~= nil
+end
+
+-- pawns returns every player's pawn this frame in one reply, in slot order,
+-- each as Pawn returns it: a mode that reads every hero each frame makes
+-- one call instead of one per player. A slot Pawn answers nothing for is
+-- left out.
+function modlock.pawns(): { PlayerPawn }
+	local response = call("Pawns", "Empty", {}, "PawnsResponse")
+	if response == nil then
+		return {}
+	end
+	return response.pawns
 end
 
 -- readFile reads one of the mod's files: the host's copy, which the mod
@@ -4883,7 +5202,8 @@ end
 -- holdEntityModifier keeps a modifier, named as GiveModifier names it, on a
 -- live entity with no expiry, giving it back whenever the game removes it
 -- while the entity lives. The hold ends with the entity or when active is
--- false.
+-- false. Releasing leaves the entity's current modifier; the mod stopping
+-- removes it.
 function modlock.holdEntityModifier(entity: number, modifier: string, active: boolean?): boolean
 	return call("HoldEntityModifier", "HoldEntityModifierRequest", { entity = entity, modifier = modifier, active = active }) ~= nil
 end
@@ -4907,6 +5227,10 @@ export type ModHandlers = {
 	-- chat reports each chat line the server accepted from a player the mod
 	-- serves, while the mod asked for chat, before the line's command.
 	chat: (event: ChatEvent) -> (),
+	-- ping offers each ping a player the mod serves sends, before the server
+	-- shows it to anyone, while the mod asked for pings. The mod's answer may
+	-- drop it for every recipient or mute its voice line for some.
+	ping: (event: PingEvent) -> PingResult,
 	-- world follows each world load, and start when a world has already
 	-- loaded. Objects and bots from an earlier world are gone by then.
 	world: (event: WorldEvent) -> (),
@@ -4969,15 +5293,29 @@ export type ModHandlers = {
 	-- human who finished joining, a bot once added, and at start each player
 	-- already in the game. It follows the PlayersChanged that lists them.
 	playerJoined: (event: PlayerJoinedEvent) -> (),
-	-- playerLeft reports each joined player leaving the mod, once. A player who
-	-- disconnects is reported before the engine removes them, so their slot
-	-- and hero still read, and before the PlayersChanged that drops them. A
+	-- playerAway reports a joined human whose client disconnected while the
+	-- server holds their seat. The player is not gone: their controller and
+	-- hero stay, and they may return to them, so a mod keeps their seat as it
+	-- stands. It follows the PlayersChanged that lists them away.
+	playerAway: (event: PlayerAwayEvent) -> (),
+	-- playerReturned reports an away player who reconnected to their seat and
+	-- finished joining again. It follows the PlayersChanged that lists them
+	-- ready.
+	playerReturned: (event: PlayerReturnedEvent) -> (),
+	-- playerLeft reports each joined player leaving the mod, once, when their
+	-- seat ends: a bot removed, a human kicked or released by the program that
+	-- runs the host, or a human away past the game's limit. A human whose
+	-- client merely disconnects is away first. The leave arrives before the
+	-- engine frees the slot, so the slot and hero still read, and before the
+	-- PlayersChanged that drops them. Modlock then clears what the seat left:
+	-- its hero is killed and kept down, and its controller leaves its team. A
 	-- disconnect the mod causes during its own event, such as removing a bot,
 	-- arrives after that event returns.
 	playerLeft: (event: PlayerLeftEvent) -> (),
-	-- playersChanged reports the occupied player slots before the first event
-	-- after Start, and again before the next event whenever a player joins,
-	-- finishes joining or leaves, so a mod lists players without a call.
+	-- playersChanged reports the player slots with a seat, connected or away,
+	-- before the first event after Start, and again before the next event
+	-- whenever a player joins, finishes joining, goes away, returns or leaves,
+	-- so a mod lists players without a call.
 	playersChanged: (event: PlayersChangedEvent) -> (),
 }
 
@@ -4987,6 +5325,7 @@ local events: { [string]: { request: string, response: string, handler: string }
 	Frame = { request = "FrameEvent", response = "Empty", handler = "frame" },
 	Command = { request = "CommandEvent", response = "CommandResult", handler = "command" },
 	Chat = { request = "ChatEvent", response = "Empty", handler = "chat" },
+	Ping = { request = "PingEvent", response = "PingResult", handler = "ping" },
 	World = { request = "WorldEvent", response = "Empty", handler = "world" },
 	UiPress = { request = "UiPressEvent", response = "Empty", handler = "uiPress" },
 	UiInput = { request = "UiInputEvent", response = "Empty", handler = "uiInput" },
@@ -5009,6 +5348,8 @@ local events: { [string]: { request: string, response: string, handler: string }
 	Landed = { request = "LandedEvent", response = "Empty", handler = "landed" },
 	SettingChanged = { request = "SettingChangedEvent", response = "Empty", handler = "settingChanged" },
 	PlayerJoined = { request = "PlayerJoinedEvent", response = "Empty", handler = "playerJoined" },
+	PlayerAway = { request = "PlayerAwayEvent", response = "Empty", handler = "playerAway" },
+	PlayerReturned = { request = "PlayerReturnedEvent", response = "Empty", handler = "playerReturned" },
 	PlayerLeft = { request = "PlayerLeftEvent", response = "Empty", handler = "playerLeft" },
 	PlayersChanged = { request = "PlayersChangedEvent", response = "Empty", handler = "playersChanged" },
 }
@@ -5078,6 +5419,11 @@ modlock.Buttons = {
 	ability3 = 2 ^ 35,
 	-- ultimate is the hero's ultimate ability key, the fourth.
 	ultimate = 2 ^ 36,
+	-- item1 to item4 are the hero's four active item keys.
+	item1 = 2 ^ 37,
+	item2 = 2 ^ 38,
+	item3 = 2 ^ 39,
+	item4 = 2 ^ 40,
 	-- parry is the melee parry button.
 	parry = 2 ^ 42,
 	-- specNext to specToggleTeam are the buttons a player's client sends in
@@ -5113,7 +5459,7 @@ modlock.Layers = {
 }
 
 -- has reports whether bits, a sum of Buttons or Layers bits, holds bit.
--- bit32 reaches only the low 32 bits, and these bits go up to 2^42.
+-- bit32 reaches only the low 32 bits, and these bits go up to 2^52.
 function modlock.has(bits: number, bit: number): boolean
 	return bits // bit % 2 == 1
 end
@@ -5160,6 +5506,9 @@ export type MatchOptions = {
 export type ScoreOptions = MatchOptions & {
 	-- tiebreak ranks equal values, lower first, such as fewer deaths.
 	tiebreak: number?,
+	-- teammates are the scoring player's teammates on a board that ranks
+	-- teams, each enrolled with bindScorePlayer: the board's teamSize less one.
+	teammates: { ScorePlayer }?,
 }
 
 -- ScorePlayer is a human connection enrolled for reporting.
@@ -5188,9 +5537,21 @@ export type BoardRead = {
 	limit: number?,
 	-- player asks for this connection's own row too.
 	player: Connection?,
+	-- teammates name the player's teammates on a board that ranks teams, so
+	-- the page's player row is their team's; each is in the game now.
+	teammates: { Connection }?,
 }
 
--- BoardRow is one player's place on a board.
+-- BoardMember is one player of a team's row.
+export type BoardMember = {
+	-- steamId is the player's 64-bit Steam ID in decimal.
+	steamId: string,
+	name: string,
+}
+
+-- BoardRow is one player's place on a board, or a team's on a board that
+-- ranks teams: its members then, ordered by SteamID64, with steamId and name
+-- the first member's.
 export type BoardRow = {
 	rank: number,
 	-- steamId is the player's 64-bit Steam ID in decimal.
@@ -5199,6 +5560,7 @@ export type BoardRow = {
 	value: number,
 	tiebreak: number,
 	count: number,
+	members: { BoardMember },
 }
 
 -- BoardPage is a page of a board.
@@ -5224,6 +5586,24 @@ function modlock.bindScorePlayer(connection: Connection): ScorePlayer?
 	return wire.decode(schema, "ScoreConnection", reply) :: ScorePlayer
 end
 
+-- teammatesOf encodes a team score's enrolled teammates.
+local function teammatesOf(teammates: { ScorePlayer }?): { any }
+	local encoded = {}
+	for _, teammate in teammates or {} do
+		table.insert(encoded, { player = Player.new(teammate.slot), connection = teammate })
+	end
+	return encoded
+end
+
+-- readTeammatesOf encodes a team read's live teammates.
+local function readTeammatesOf(teammates: { Connection }?): { any }
+	local encoded = {}
+	for _, teammate in teammates or {} do
+		table.insert(encoded, { player = teammate.player, connection = scoreIdentity(teammate) })
+	end
+	return encoded
+end
+
 -- reportScore reports the enrolled player's result and answers on a later frame.
 function modlock.reportScore(player: ScorePlayer, board: string, value: number, done: ScoreDone, options: ScoreOptions?)
 	local o: ScoreOptions = options or {}
@@ -5237,6 +5617,7 @@ function modlock.reportScore(player: ScorePlayer, board: string, value: number, 
 		key = o.key,
 		earnedAtUnixMillis = math.round(o.earnedAt or 0),
 		evidence = o.evidence,
+		teammates = teammatesOf(o.teammates),
 	})
 	modlock.callServiceLater(scoresService, "Report", report, function(_, err)
 		done(err)
@@ -5278,6 +5659,7 @@ function modlock.readBoard(board: string, read: BoardRead, done: (BoardPage?, st
 		limit = r.limit,
 		player = if r.player then r.player.player else nil,
 		connection = if r.player then scoreIdentity(r.player) else nil,
+		teammates = readTeammatesOf(r.teammates),
 	})
 	modlock.callServiceLater(scoresService, "Read", query, function(reply, err)
 		if reply == nil then
@@ -5314,12 +5696,15 @@ local frames: { (frame: FrameEvent) -> () } = {}
 local chats: { (line: ChatEvent) -> () } = {}
 local joins: { (joined: PlayerJoinedEvent) -> () } = {}
 local leaves: { (left: PlayerLeftEvent) -> () } = {}
+local aways: { (away: PlayerAwayEvent) -> () } = {}
+local returns: { (returned: PlayerReturnedEvent) -> () } = {}
 local worlds: { (map: string) -> () } = {}
 local inputs: { (player: Player, pressed: number, released: number) -> () } = {}
 local restoreds: { (player: Player, error: string?) -> () } = {}
 local npcsRestoreds: { (error: string?) -> () } = {}
 local damages: { (hit: DamageEvent) -> DamageResult? } = {}
 local damageds: { (hit: DamagedEvent) -> () } = {}
+local pings: { (ping: PingEvent) -> PingResult? } = {}
 local kills: { (kill: KillEvent) -> () } = {}
 local abilityCasts: { (cast: AbilityCastEvent) -> () } = {}
 local heals: { (heal: HealEvent) -> () } = {}
@@ -5954,7 +6339,7 @@ function modlock.command(name: string, handler: (player: Player, args: string) -
 end
 
 -- onStart calls handler once when the server starts the mod, with the
--- arguments that follow -- on the modlock-host command line.
+-- words after -- on the modlock dev or play command line.
 function modlock.onStart(handler: (args: { string }) -> ())
 	table.insert(starts, handler)
 end
@@ -6142,10 +6527,29 @@ function modlock.onPlayerJoin(handler: (joined: PlayerJoinedEvent) -> ())
 	table.insert(joins, handler)
 end
 
+-- onPlayerAway calls handler once each time a joined human's client
+-- disconnects while the server holds their seat. They have not left: their
+-- hero and controller stay in the game, and onPlayerReturn follows if they
+-- come back, so keep their seat as it stands rather than clear it.
+function modlock.onPlayerAway(handler: (away: PlayerAwayEvent) -> ())
+	table.insert(aways, handler)
+end
+
+-- onPlayerReturn calls handler once each time an away player reconnects to
+-- their seat and finishes joining again, with the same Player, generation and
+-- hero they left.
+function modlock.onPlayerReturn(handler: (returned: PlayerReturnedEvent) -> ())
+	table.insert(returns, handler)
+end
+
 -- onPlayerLeave calls handler once for each joined player who leaves the mod,
--- with the reason the server dropped them when it gave one. A player who
--- disconnects still has their slot and hero during the call. A player the
--- mod stops serving leaves too, with disconnected false.
+-- with the reason the server dropped them when it gave one. A seat ends, and
+-- its player leaves, when a bot is removed, a human is kicked or released by
+-- the program that runs the host, or a human stays away past the game's
+-- limit; a human who only disconnects is away first. The slot and hero still
+-- read during the call, and afterwards Modlock kills the hero, keeps it down
+-- and takes the controller off its team, so the mod need not clear them. A
+-- player the mod stops serving leaves too, with disconnected false.
 function modlock.onPlayerLeave(handler: (left: PlayerLeftEvent) -> ())
 	table.insert(leaves, handler)
 end
@@ -6288,6 +6692,17 @@ local function respawned(player: Player)
 	end
 end
 
+-- onPing calls handler with each ping a player sends, from the comms wheel, a
+-- quick ping key, the map or an ability, before anyone sees it, so it can
+-- block the ping or mute its voice line. A blocked ping reaches nobody, the
+-- sender included: no marker, sound, voice line or chat line. The players a
+-- handler lists in muteVoice, by slot, get the ping without its voice line.
+-- The handler runs inside the server's ping, so it decides at once and defers
+-- other work to a frame.
+function modlock.onPing(handler: (ping: PingEvent) -> PingResult?)
+	table.insert(pings, handler)
+end
+
 -- onDamaged calls handler on the frame after each hit lands.
 function modlock.onDamaged(handler: (hit: DamagedEvent) -> ())
 	table.insert(damageds, handler)
@@ -6391,13 +6806,14 @@ local handlers: ModHandlers = {
 			damage = #damages ~= 0,
 			damaged = #damageds ~= 0,
 			chat = #chats ~= 0,
-			joins = #joins ~= 0 or #leaves ~= 0,
+			joins = #joins ~= 0 or #leaves ~= 0 or #aways ~= 0 or #returns ~= 0,
 			casts = #abilityCasts ~= 0,
 			kills = #kills ~= 0,
 			heals = #heals ~= 0,
 			levels = #levels ~= 0,
 			melees = #melees ~= 0,
 			parries = #parries ~= 0,
+			pings = #pings ~= 0,
 			modifierEvents = watched,
 		}
 	end,
@@ -6490,6 +6906,26 @@ local handlers: ModHandlers = {
 
 		-- Answer nothing when no handler changed the hit.
 		return if amount == event.amount then {} else { amount = amount }
+	end,
+
+	ping = function(event)
+		-- The first handler that blocks the ping ends its dispatch; the others
+		-- add the players they mute its voice line for.
+		local muted: { [number]: boolean } = {}
+		local muteVoice: { number } = {}
+		for _, handler in pings do
+			local result = handler(event)
+			if result and result.block then
+				return { block = true }
+			end
+			for _, slot in (result and result.muteVoice) or {} do
+				if not muted[slot] then
+					muted[slot] = true
+					table.insert(muteVoice, slot)
+				end
+			end
+		end
+		return { block = false, muteVoice = muteVoice }
 	end,
 
 	damaged = function(event)
@@ -6609,6 +7045,18 @@ local handlers: ModHandlers = {
 	-- A join and a leave run at once, so the leaving player's hero still reads.
 	playerJoined = function(event)
 		for _, handler in joins do
+			handler(event)
+		end
+	end,
+
+	playerAway = function(event)
+		for _, handler in aways do
+			handler(event)
+		end
+	end,
+
+	playerReturned = function(event)
+		for _, handler in returns do
 			handler(event)
 		end
 	end,

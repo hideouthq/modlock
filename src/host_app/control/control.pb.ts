@@ -4,6 +4,10 @@
 
 import { createEnumType } from '@aptre/protobuf-es-lite/enum'
 import { RolesTable } from '../../wasm/players/players.pb.js'
+import {
+  ControllerFrames,
+  ControllerWants,
+} from '../../wasm/controllers/controllers.pb.js'
 import type { MessageType } from '@aptre/protobuf-es-lite/message'
 import { createMessageType } from '@aptre/protobuf-es-lite/message'
 import type {
@@ -62,6 +66,7 @@ export interface ControlRequest {
     | { value: ServiceReply; case: 'service' }
     | { value: ModCall; case: 'call' }
     | { value: ServiceAnswer; case: 'answer' }
+    | { value: ControllerFrames; case: 'controllers' }
 }
 
 export const ControlRequest: MessageType<ControlRequest> =
@@ -73,6 +78,7 @@ export const ControlRequest: MessageType<ControlRequest> =
       [3, 'service', 11, 0, ServiceReply.codec, 'body'],
       [4, 'call', 11, 0, ModCall.codec, 'body'],
       [5, 'answer', 11, 0, ServiceAnswer.codec, 'body'],
+      [6, 'controllers', 11, 0, ControllerFrames.codec, 'body'],
     ],
     {
       decode: (
@@ -134,6 +140,16 @@ export const ControlRequest: MessageType<ControlRequest> =
                 ),
               }
               break
+            case 6:
+              m.body = {
+                case: 'controllers',
+                value: ControllerFrames.decode(
+                  r,
+                  r.delimited(),
+                  m.body?.case === 'controllers' ? m.body.value : {},
+                ),
+              }
+              break
             default:
               r.skip(t)
           }
@@ -165,6 +181,11 @@ export const ControlRequest: MessageType<ControlRequest> =
           const o = m.body
           if (o?.case === 'answer' && o.value != null)
             ServiceAnswer.writeField(w, 5, o.value)
+        }
+        {
+          const o = m.body
+          if (o?.case === 'controllers' && o.value != null)
+            ControllerFrames.writeField(w, 6, o.value)
         }
       },
     },
@@ -415,6 +436,7 @@ export interface HostEvent {
     | { value: ServiceResult; case: 'serviceApplied' }
     | { value: ModCallResult; case: 'called' }
     | { value: ServiceCall; case: 'serviceCall' }
+    | { value: ControllerWants; case: 'controllersWanted' }
 }
 
 export const HostEvent: MessageType<HostEvent> =
@@ -435,6 +457,7 @@ export const HostEvent: MessageType<HostEvent> =
       [12, 'service_applied', 11, 0, ServiceResult.codec, 'body'],
       [13, 'called', 11, 0, ModCallResult.codec, 'body'],
       [14, 'service_call', 11, 0, ServiceCall.codec, 'body'],
+      [15, 'controllers_wanted', 11, 0, ControllerWants.codec, 'body'],
     ],
     {
       decode: (r: BinaryReader, end: number, m: HostEvent): HostEvent => {
@@ -582,6 +605,16 @@ export const HostEvent: MessageType<HostEvent> =
                 ),
               }
               break
+            case 15:
+              m.body = {
+                case: 'controllersWanted',
+                value: ControllerWants.decode(
+                  r,
+                  r.delimited(),
+                  m.body?.case === 'controllersWanted' ? m.body.value : {},
+                ),
+              }
+              break
             default:
               r.skip(t)
           }
@@ -658,6 +691,11 @@ export const HostEvent: MessageType<HostEvent> =
           const o = m.body
           if (o?.case === 'serviceCall' && o.value != null)
             ServiceCall.writeField(w, 14, o.value)
+        }
+        {
+          const o = m.body
+          if (o?.case === 'controllersWanted' && o.value != null)
+            ControllerWants.writeField(w, 15, o.value)
         }
       },
     },
@@ -1024,6 +1062,12 @@ export interface PlayerJoined {
    * answers calls naming a generation refuses them all when it is zero.
    */
   generation?: number
+  /**
+   * Address is the ip:port the player's packets come from, such as
+   * 127.0.0.1:27006, which tells a controller which of its forwarded links
+   * carries the player; empty from a host that does not report it.
+   */
+  address?: string
 }
 
 export const PlayerJoined: MessageType<PlayerJoined> =
@@ -1034,6 +1078,7 @@ export const PlayerJoined: MessageType<PlayerJoined> =
       [2, 'name', 9],
       [3, 'steam_id', 6],
       [4, 'generation', 13],
+      [5, 'address', 9],
     ],
     {
       decode: (r: BinaryReader, end: number, m: PlayerJoined): PlayerJoined => {
@@ -1052,6 +1097,9 @@ export const PlayerJoined: MessageType<PlayerJoined> =
               break
             case 4:
               m.generation = r.uint32()
+              break
+            case 5:
+              m.address = r.string()
               break
             default:
               r.skip(t)
@@ -1075,6 +1123,10 @@ export const PlayerJoined: MessageType<PlayerJoined> =
         {
           const v = m.generation
           if (v) w.uint32(32).uint32(v)
+        }
+        {
+          const v = m.address
+          if (v) w.uint32(42).string(v)
         }
       },
     },

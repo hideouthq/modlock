@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/paralin/modlock/src/host_app/control"
+	"github.com/paralin/modlock/src/wasm/controllers"
 	"github.com/paralin/modlock/src/wasm/players"
 	"github.com/pkg/errors"
 )
@@ -196,6 +197,12 @@ func (s *Session) Reload(ctx context.Context, path string) error {
 // arrives as a called event.
 func (s *Session) Call(ctx context.Context, call *control.ModCall) error {
 	return s.control.Call(ctx, call)
+}
+
+// Controllers passes one player's controller frames, which the caller bound
+// to that player, to the host.
+func (s *Session) Controllers(ctx context.Context, frames *controllers.ControllerFrames) error {
+	return s.control.Controllers(ctx, frames)
 }
 
 // SetService installs a lobby's applied configuration before restarting its mod.

@@ -400,11 +400,20 @@ class WasmPlugin final : public Plugin {
   bool Command(int32_t slot, std::string_view line);
   // Chat delivers one chat line to a mod that asked for chat.
   void Chat(const gameinterop::NativeChatHook::Message& line);
+  // Ping offers one player's ping to a mod that asked for pings, reports
+  // whether the mod blocks it, and adds the slots it mutes the voice line
+  // for to voice_muted.
+  bool Ping(const gameinterop::NativePingFilter::Ping& ping, uint64_t& voice_muted);
   void ShowUi(int32_t slot, const ui::Change& change);
   // Leave drops the player in slot from the mod, which hears them leave if
   // they joined. reason is the engine's disconnect reason when they leave
   // the server, and nullopt when they stay but the mod stops serving them.
   void Leave(int32_t slot, std::optional<int32_t> reason);
+  // Away drops the interface of the player in slot, whose client disconnected
+  // while the server holds their seat.
+  void Away(int32_t slot);
+  // DropUi forgets the interface of the player in slot and resets it.
+  void DropUi(int32_t slot);
   // HandOn hands the player's metric totals to the host's metrics, or logs
   // them, and forgets them.
   void HandOn(int32_t slot);
@@ -577,6 +586,19 @@ class WasmPlugin final : public Plugin {
   // they went to the observers.
   wasm::CallProfile calls_;
   std::chrono::steady_clock::time_point calls_reported_;
+
+  // Section is one part of the host's own frame work, timed since
+  // calls_reported_: Play runs on every open frame, Observe on each frame
+  // the mod receives. ReportCalls logs both and starts them afresh.
+  struct Section {
+    uint32_t frames = 0;
+    std::chrono::steady_clock::duration total{};
+    std::chrono::steady_clock::duration slowest{};
+    void Add(std::chrono::steady_clock::duration spent);
+  };
+
+  Section play_;
+  Section observe_;
 };
 
 }  // namespace modlock::wasm

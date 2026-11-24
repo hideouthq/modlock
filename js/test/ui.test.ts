@@ -32,6 +32,8 @@ import {
   show,
   showChatLines,
   uiSound,
+  useDenseUiRecords,
+  type Style,
 } from '../src/index.js'
 import { Player } from '../src/host.gen.js'
 import { keepPlayers } from '../src/players.js'
@@ -155,6 +157,26 @@ test('a redraw sends only the nodes that changed, under their first ids', () => 
   show(player, score('Score  Leading'))
   const classed = sent.at(-1)!.change!.set!
   expect(classed.map((node) => node.classes)).toEqual([['Score', 'Leading']])
+
+  // A subtree passed again as the same object keeps its nodes and its press,
+  // and only its changed sibling is sent.
+  let presses = 0
+  const kept = jsx('button', {
+    onPress: () => presses++,
+    children: jsx('label', { children: 'Kept' }),
+  })
+  const beside = (count: number) =>
+    jsx('panel', {
+      children: [kept, jsx('label', { children: String(count) })],
+    })
+  show(player, beside(1))
+  const shown = sent.at(-1)!.change!.set!
+  const button = shown.find((node) => node.kind === Kind.BUTTON)!.id!
+  show(player, beside(2))
+  expect(sent.at(-1)!.change!.set!.map((node) => node.text)).toEqual(['2'])
+  show(player, beside(3))
+  press(player, button)
+  expect(presses).toBe(1)
 })
 
 test('clicks on the ability bar reach the handler while the root asks', () => {
@@ -230,6 +252,7 @@ test("the ability display names each row's player as Tab shows them", () => {
       bot: bot as boolean,
       ready: false,
       generation: 0,
+      away: false,
       roles: [],
     })),
   )
@@ -405,6 +428,82 @@ test("a style names the game's faces, edges, paint and motion on the wire", () =
   expect(leave!.hover).toBeUndefined()
 })
 
+test('sparse and dense records send the same bytes', () => {
+  // Every style field set, on a node with every common field, plus a bad color.
+  const style: Style = {
+    width: 120,
+    height: 'fit',
+    minWidth: '10%',
+    maxWidth: 'fill',
+    minHeight: 4,
+    maxHeight: 400,
+    x: 3,
+    y: -2,
+    flow: 'down',
+    horizontalAlign: 'center',
+    verticalAlign: 'bottom',
+    textAlign: 'right',
+    margin: [1, 2],
+    padding: 4,
+    background: '#102030',
+    color: '#ffffff80',
+    borderColor: 'nope',
+    fontSize: 18,
+    bold: true,
+    borderRadius: 6,
+    opacity: 0.5,
+    face: 'block',
+    uppercase: true,
+    letterSpacing: 1,
+    shadow: true,
+    borderWidth: 2,
+    zIndex: 3,
+    overflow: 'scroll',
+    overflowY: 'clip',
+    gradient: { shape: 'right', colors: ['#000000', '#ffffff'] },
+    boxShadow: { x: 1, y: 2, blur: 3, color: '#000000' },
+    textShadow: { blur: 2, color: '#112233' },
+    tint: '#ff0000',
+    saturation: 1.2,
+    brightness: 0.9,
+    contrast: 1.1,
+    blur: 1,
+    italic: true,
+    weight: 'semiBold',
+    lineHeight: 1.4,
+    noWrap: true,
+    textOverflow: 'ellipsis',
+    decoration: 'underline',
+    translate: [1, 2],
+    scale: 2,
+    rotate: 15,
+    origin: [0.5, 0.5],
+    turn: 90,
+    transition: { seconds: 0.2, easing: 'inOut', curve: [0, 0, 1, 1] },
+  }
+  const tree = () =>
+    jsx('button', {
+      style,
+      hover: { background: '#304050' },
+      enter: { opacity: 0 },
+      exit: { opacity: 0 },
+      tooltip: 'tip',
+      hoverSound: 'UI.MainMenu.Hover',
+      class: 'a b',
+      hideInChat: true,
+      children: [jsx('label', { style: {}, children: 'x' }), 'y'],
+    })
+
+  // Each form draws a fresh player's screen; only the slot may differ.
+  const drawn = (slot: number, dense: boolean) => {
+    useDenseUiRecords(dense)
+    show(new Player(slot), tree())
+    useDenseUiRecords(false)
+    return UiRequest.toBinary({ ...sent.at(-1)!, player: 0 })
+  }
+  expect(drawn(20, false)).toEqual(drawn(21, true))
+})
+
 test('inputs carry their values and hand changes to the mod', () => {
   // Show a name entry, a slider, a disabled toggle, an avatar and a token.
   const player = new Player(9)
@@ -518,6 +617,7 @@ test('chat lines and the parts hidden for all reach each player, and a leave cle
       bot: false,
       ready: true,
       generation: 0,
+      away: false,
       roles: [],
     })),
   )

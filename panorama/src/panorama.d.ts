@@ -32,6 +32,7 @@ interface Panel {
     overrideExisting: boolean,
     partial: boolean,
   ): boolean
+  FindChild(id: string): Panel | null
   FindChildTraverse(id: string): Panel | null
   FindChildrenWithClassTraverse(name: string): Panel[]
   BHasClass(name: string): boolean

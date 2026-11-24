@@ -403,7 +403,8 @@ export const RestoredEvent: MessageType<RestoredEvent> =
   )
 
 /**
- * PlayersChangedEvent holds every occupied player slot, as Players lists them.
+ * PlayersChangedEvent holds every player slot with a seat, connected or
+ * away, as Players lists them.
  *
  * @generated from message modlock.wasm.players.PlayersChangedEvent
  */
@@ -485,6 +486,106 @@ export const PlayerJoinedEvent: MessageType<PlayerJoinedEvent> =
         return m
       },
       encode: (m: PlayerJoinedEvent, w: Writer): void => {
+        {
+          const v = m.connection
+          if (v != null) Connection.writeField(w, 1, v)
+        }
+      },
+    },
+  )
+
+/**
+ * PlayerAwayEvent reports a joined player whose client disconnected while the
+ * server holds their seat. Their controller and hero stay in the game, and the
+ * player may return to them.
+ *
+ * @generated from message modlock.wasm.players.PlayerAwayEvent
+ */
+export interface PlayerAwayEvent {
+  /**
+   * Connection is the player as Players lists them, away.
+   */
+  connection?: Connection
+}
+
+export const PlayerAwayEvent: MessageType<PlayerAwayEvent> =
+  /* @__PURE__ */ createMessageType<PlayerAwayEvent>(
+    'modlock.wasm.players.PlayerAwayEvent',
+    () => [[1, 'connection', 11, 0, Connection.codec]],
+    {
+      decode: (
+        r: BinaryReader,
+        end: number,
+        m: PlayerAwayEvent,
+      ): PlayerAwayEvent => {
+        while (r.pos < end) {
+          const t = r.tag()
+          if ((t & 7) === 4) return m
+          switch (t >>> 3) {
+            case 1:
+              m.connection = Connection.decode(
+                r,
+                r.delimited(),
+                m.connection ?? {},
+              )
+              break
+            default:
+              r.skip(t)
+          }
+        }
+        return m
+      },
+      encode: (m: PlayerAwayEvent, w: Writer): void => {
+        {
+          const v = m.connection
+          if (v != null) Connection.writeField(w, 1, v)
+        }
+      },
+    },
+  )
+
+/**
+ * PlayerReturnedEvent reports an away player who reconnected to their seat
+ * and finished joining again. The seat, its generation and its hero are the
+ * ones they left.
+ *
+ * @generated from message modlock.wasm.players.PlayerReturnedEvent
+ */
+export interface PlayerReturnedEvent {
+  /**
+   * Connection is the player as Players lists them, ready again.
+   */
+  connection?: Connection
+}
+
+export const PlayerReturnedEvent: MessageType<PlayerReturnedEvent> =
+  /* @__PURE__ */ createMessageType<PlayerReturnedEvent>(
+    'modlock.wasm.players.PlayerReturnedEvent',
+    () => [[1, 'connection', 11, 0, Connection.codec]],
+    {
+      decode: (
+        r: BinaryReader,
+        end: number,
+        m: PlayerReturnedEvent,
+      ): PlayerReturnedEvent => {
+        while (r.pos < end) {
+          const t = r.tag()
+          if ((t & 7) === 4) return m
+          switch (t >>> 3) {
+            case 1:
+              m.connection = Connection.decode(
+                r,
+                r.delimited(),
+                m.connection ?? {},
+              )
+              break
+            default:
+              r.skip(t)
+          }
+        }
+        return m
+      },
+      encode: (m: PlayerReturnedEvent, w: Writer): void => {
         {
           const v = m.connection
           if (v != null) Connection.writeField(w, 1, v)
@@ -680,10 +781,12 @@ export interface Connection {
   bot?: boolean
   /**
    * Ready is true once a human has finished joining; bots are always ready.
+   * An away player is not ready.
    */
   ready?: boolean
   /**
-   * Generation changes each time a new connection takes the slot.
+   * Generation identifies the seat: it changes when a new player or bot takes
+   * the slot, and stays the same when an away player returns.
    */
   generation?: number
   /**
@@ -693,6 +796,11 @@ export interface Connection {
    * shared data checks its own writers.
    */
   roles?: ModRole[]
+  /**
+   * Away is true while the player's client is disconnected and the server
+   * holds their seat for them to return.
+   */
+  away?: boolean
 }
 
 export const Connection: MessageType<Connection> =
@@ -706,6 +814,7 @@ export const Connection: MessageType<Connection> =
       [5, 'ready', 8],
       [6, 'generation', 13],
       [7, 'roles', 14, 3, ModRole_Enum],
+      [8, 'away', 8],
     ],
     {
       decode: (r: BinaryReader, end: number, m: Connection): Connection => {
@@ -734,6 +843,9 @@ export const Connection: MessageType<Connection> =
             case 7:
               for (const e = r.run(t), a = (m.roles ??= []); r.pos < e;)
                 a.push(r.int32())
+              break
+            case 8:
+              m.away = r.bool()
               break
             default:
               r.skip(t)
@@ -773,6 +885,10 @@ export const Connection: MessageType<Connection> =
             for (const e of a) w.int32(e)
             w.join(s)
           }
+        }
+        {
+          const v = m.away
+          if (v) w.uint32(64).bool(v)
         }
       },
     },
@@ -962,6 +1078,98 @@ export const PawnResponse: MessageType<PawnResponse> =
         {
           const v = m.pawn
           if (v != null) Pawn.writeField(w, 1, v)
+        }
+      },
+    },
+  )
+
+/**
+ * PawnsResponse answers Pawns.
+ *
+ * @generated from message modlock.wasm.players.PawnsResponse
+ */
+export interface PawnsResponse {
+  pawns?: PlayerPawn[]
+}
+
+export const PawnsResponse: MessageType<PawnsResponse> =
+  /* @__PURE__ */ createMessageType<PawnsResponse>(
+    'modlock.wasm.players.PawnsResponse',
+    () => [[1, 'pawns', 11, 1, PlayerPawn.codec]],
+    {
+      decode: (
+        r: BinaryReader,
+        end: number,
+        m: PawnsResponse,
+      ): PawnsResponse => {
+        while (r.pos < end) {
+          const t = r.tag()
+          if ((t & 7) === 4) return m
+          switch (t >>> 3) {
+            case 1:
+              ;(m.pawns ??= []).push(PlayerPawn.decode(r, r.delimited(), {}))
+              break
+            default:
+              r.skip(t)
+          }
+        }
+        return m
+      },
+      encode: (m: PawnsResponse, w: Writer): void => {
+        {
+          const a = m.pawns
+          if (a != null) for (const e of a) PlayerPawn.writeField(w, 1, e)
+        }
+      },
+    },
+  )
+
+/**
+ * PlayerPawn is one player's pawn.
+ *
+ * @generated from message modlock.wasm.players.PlayerPawn
+ */
+export interface PlayerPawn {
+  /**
+   * Player is the player's server slot.
+   */
+  player?: number
+  pawn?: Pawn
+}
+
+export const PlayerPawn: MessageType<PlayerPawn> =
+  /* @__PURE__ */ createMessageType<PlayerPawn>(
+    'modlock.wasm.players.PlayerPawn',
+    () => [
+      [1, 'player', 5],
+      [2, 'pawn', 11, 0, Pawn.codec],
+    ],
+    {
+      decode: (r: BinaryReader, end: number, m: PlayerPawn): PlayerPawn => {
+        while (r.pos < end) {
+          const t = r.tag()
+          if ((t & 7) === 4) return m
+          switch (t >>> 3) {
+            case 1:
+              m.player = r.int32()
+              break
+            case 2:
+              m.pawn = Pawn.decode(r, r.delimited(), m.pawn ?? {})
+              break
+            default:
+              r.skip(t)
+          }
+        }
+        return m
+      },
+      encode: (m: PlayerPawn, w: Writer): void => {
+        {
+          const v = m.player
+          if (v) w.uint32(8).int32(v)
+        }
+        {
+          const v = m.pawn
+          if (v != null) Pawn.writeField(w, 2, v)
         }
       },
     },

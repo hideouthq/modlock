@@ -36,9 +36,13 @@ import {
   type ModifierFiredEvent,
   type ParryEvent,
   type Pawn,
+  type PingEvent,
+  type PingResult,
   Player,
   type PlayerJoinedEvent,
   type PlayerLeftEvent,
+  type PlayerAwayEvent,
+  type PlayerReturnedEvent,
   serveMod,
 } from './host.gen.js'
 import { serveEvents } from './host.js'
@@ -50,7 +54,16 @@ import { endServiceCall } from './service-later.js'
 import { advance, after } from './timer.js'
 import { chatShown } from './chat.js'
 import { Stragglers, type StragglersOptions } from './stragglers.js'
-import { change, heard, joined, left, press, tick } from './ui.js'
+import {
+  away,
+  change,
+  heard,
+  joined,
+  left,
+  press,
+  returned,
+  tick,
+} from './ui.js'
 export * as vector from './vector.js'
 
 export { Buttons, Layers } from './bits.js'
@@ -63,6 +76,10 @@ export {
   type CameraPulseOptions,
   cameraShake,
   type CameraShakeOptions,
+  type EntityCamera,
+  entityCamera,
+  type EntityCameraOptions,
+  entityCameraSettleSeconds,
   playCamera,
   setOrbitCamera,
 } from './camera.js'
@@ -125,6 +142,7 @@ export {
   raceGateResources,
 } from './racegate.js'
 export { connection, players } from './players.js'
+export { setPawnCache } from './pawns.js'
 export {
   afterMatch,
   fewestPlayed,
@@ -247,6 +265,7 @@ export {
   type Transition,
   type UiElement,
   uiSound,
+  useDenseUiRecords,
 } from './ui.js'
 
 /** LogPart is a value log writes as text. */
@@ -289,7 +308,7 @@ export function command(
 
 /**
  * onStart calls handler once when the server starts the mod, with the
- * arguments that follow -- on the modlock-host command line. The mod starts
+ * words after -- on the modlock dev or play command line. The mod starts
  * before any world loads, so find the map's entities in onWorld.
  */
 export function onStart(handler: (args: readonly string[]) => void): void {
@@ -316,10 +335,35 @@ export function onPlayerJoin(
 }
 
 /**
+ * onPlayerAway calls handler once each time a joined human's client
+ * disconnects while the server holds their seat. They have not left: their
+ * hero and controller stay in the game, and onPlayerReturn follows if they
+ * come back, so keep their seat as it stands rather than clear it.
+ */
+export function onPlayerAway(handler: (away: PlayerAwayEvent) => void): void {
+  aways.push(handler)
+}
+
+/**
+ * onPlayerReturn calls handler once each time an away player reconnects to
+ * their seat and finishes joining again, with the same Player, generation and
+ * hero they left. The library has already sent them their whole interface.
+ */
+export function onPlayerReturn(
+  handler: (returned: PlayerReturnedEvent) => void,
+): void {
+  returns.push(handler)
+}
+
+/**
  * onPlayerLeave calls handler once for each joined player who leaves the mod,
- * with the reason the server dropped them when it gave one. A player who
- * disconnects still has their slot and hero during the call. A player the
- * mod stops serving leaves too, with disconnected false.
+ * with the reason the server dropped them when it gave one. A seat ends, and
+ * its player leaves, when a bot is removed, a human is kicked or released by
+ * the program that runs the host, or a human stays away past the game's
+ * limit; a human who only disconnects is away first. The slot and hero still
+ * read during the call, and afterwards Modlock kills the hero, keeps it down
+ * and takes the controller off its team, so the mod need not clear them. A
+ * player the mod stops serving leaves too, with disconnected false.
  */
 export function onPlayerLeave(handler: (left: PlayerLeftEvent) => void): void {
   leaves.push(handler)
@@ -493,8 +537,8 @@ function respawned(player: Player): void {
 
 /**
  * sweepStragglers runs a Stragglers sweep each frame for as long as the mod
- * runs: it kicks a human still joining after options.connectSeconds and lays
- * down each hero no player holds, such as the hero of a player who left.
+ * runs: it kicks a human still joining after options.connectSeconds and
+ * kills each hero no player holds, such as the hero of a player who left.
  * Only the first call's options apply.
  */
 export function sweepStragglers(options: StragglersOptions = {}): void {
@@ -554,6 +598,19 @@ export function onDamage(
   handler: (hit: DamageEvent) => DamageResult | void,
 ): void {
   damages.push(handler)
+}
+
+/**
+ * onPing calls handler with each ping a player sends, from the comms wheel, a
+ * quick ping key, the map or an ability, before anyone sees it, so it can
+ * block the ping or mute its voice line. A blocked ping reaches nobody, the
+ * sender included: no marker, sound, voice line or chat line. The players a
+ * handler lists in muteVoice, by slot, get the ping without its voice line.
+ * The handler runs inside the server's ping, so it decides at once and defers
+ * other work to a frame.
+ */
+export function onPing(handler: (ping: PingEvent) => PingResult | void): void {
+  pings.push(handler)
 }
 
 /** onDamaged calls handler on the frame after each hit lands. */
@@ -701,6 +758,8 @@ const frames: ((frame: FrameEvent) => void)[] = []
 const chats: ((line: ChatEvent) => void)[] = []
 const joins: ((joined: PlayerJoinedEvent) => void)[] = []
 const leaves: ((left: PlayerLeftEvent) => void)[] = []
+const aways: ((away: PlayerAwayEvent) => void)[] = []
+const returns: ((returned: PlayerReturnedEvent) => void)[] = []
 const spawns: ((player: Player, pawn: Pawn) => void)[] = []
 const worlds: ((map: string) => void)[] = []
 const inputs: ((player: Player, pressed: bigint, released: bigint) => void)[] =
@@ -709,6 +768,7 @@ const restoreds: ((player: Player, error: string | undefined) => void)[] = []
 const npcsRestoreds: ((error: string | undefined) => void)[] = []
 const damages: ((hit: DamageEvent) => DamageResult | void)[] = []
 const damageds: ((hit: DamagedEvent) => void)[] = []
+const pings: ((ping: PingEvent) => PingResult | void)[] = []
 const kills: ((kill: KillEvent) => void)[] = []
 const abilityCasts: ((cast: AbilityCastEvent) => void)[] = []
 const heals: ((heal: HealEvent) => void)[] = []
@@ -749,6 +809,7 @@ const handlers: ModHandlers = {
       levels: levels.length !== 0,
       melees: melees.length !== 0,
       parries: parries.length !== 0,
+      pings: pings.length !== 0,
       modifierEvents: [
         ...new Set([
           ...modifierEvents.keys(),
@@ -799,6 +860,22 @@ const handlers: ModHandlers = {
         handler(event)
       }
     })
+  },
+
+  ping(event): PingResult {
+    // The first handler that blocks the ping ends its dispatch; the others
+    // add the players they mute its voice line for.
+    const muteVoice = new Set<number>()
+    for (const handler of pings) {
+      const result = handler(event)
+      if (result?.block) {
+        return { block: true }
+      }
+      for (const slot of result?.muteVoice ?? []) {
+        muteVoice.add(slot)
+      }
+    }
+    return { block: false, muteVoice: [...muteVoice] }
   },
 
   world(event) {
@@ -946,6 +1023,22 @@ const handlers: ModHandlers = {
   playerJoined(event) {
     joined(event.connection.player)
     for (const handler of joins) {
+      handler(event)
+    }
+  },
+
+  // An away player's client lost its screen; a returning one gets it whole
+  // before the mod hears them back.
+  playerAway(event) {
+    away(event.connection.player)
+    for (const handler of aways) {
+      handler(event)
+    }
+  },
+
+  playerReturned(event) {
+    returned(event.connection.player)
+    for (const handler of returns) {
       handler(event)
     }
   },

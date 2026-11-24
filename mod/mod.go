@@ -55,11 +55,14 @@ type handlers struct {
 	chats         []func(*ChatEvent)
 	joins         []func(*PlayerJoinedEvent)
 	leaves        []func(*PlayerLeftEvent)
+	aways         []func(*PlayerAwayEvent)
+	returns       []func(*PlayerReturnedEvent)
 	worlds        []func(mapName string)
 	inputs        []func(p Player, pressed, released uint64)
 	restoreds     []func(p Player, err error)
 	npcsRestoreds []func(err error)
 	damages       []func(*DamageEvent) *DamageResult
+	pings         []func(*PingEvent) *PingResult
 	damageds      []func(*DamagedEvent)
 	kills         []func(*KillEvent)
 	casts         []func(*AbilityCastEvent)
@@ -144,7 +147,7 @@ func CallServiceLater(service, method string, payload []byte, timeout time.Durat
 }
 
 // OnStart calls handler once when the server starts the mod, with the
-// arguments that follow -- on the modlock-host command line.
+// words after -- on the modlock dev or play command line.
 func OnStart(handler func(args []string)) {
 	registered.starts = append(registered.starts, handler)
 }
@@ -167,10 +170,29 @@ func OnPlayerJoin(handler func(joined *PlayerJoinedEvent)) {
 	registered.joins = append(registered.joins, handler)
 }
 
+// OnPlayerAway calls handler once each time a joined human's client
+// disconnects while the server holds their seat. They have not left: their
+// hero and controller stay in the game, and OnPlayerReturn follows if they
+// come back, so keep their seat as it stands rather than clear it.
+func OnPlayerAway(handler func(away *PlayerAwayEvent)) {
+	registered.aways = append(registered.aways, handler)
+}
+
+// OnPlayerReturn calls handler once each time an away player reconnects to
+// their seat and finishes joining again, with the same Player, generation and
+// hero they left.
+func OnPlayerReturn(handler func(returned *PlayerReturnedEvent)) {
+	registered.returns = append(registered.returns, handler)
+}
+
 // OnPlayerLeave calls handler once for each joined player who leaves the mod,
-// with the reason the server dropped them when it gave one. A player who
-// disconnects still has their slot and hero during the call. A player the mod
-// stops serving leaves too, with Disconnected false.
+// with the reason the server dropped them when it gave one. A seat ends, and
+// its player leaves, when a bot is removed, a human is kicked or released by
+// the program that runs the host, or a human stays away past the game's
+// limit; a human who only disconnects is away first. The slot and hero still
+// read during the call, and afterwards Modlock kills the hero, keeps it down
+// and takes the controller off its team, so the mod need not clear them. A
+// player the mod stops serving leaves too, with Disconnected false.
 func OnPlayerLeave(handler func(left *PlayerLeftEvent)) {
 	registered.leaves = append(registered.leaves, handler)
 }
@@ -206,6 +228,17 @@ func OnNpcsRestored(handler func(err error)) {
 // handlers see the earlier ones' amount.
 func OnDamage(handler func(hit *DamageEvent) *DamageResult) {
 	registered.damages = append(registered.damages, handler)
+}
+
+// OnPing calls handler with each ping a player sends, from the comms wheel, a
+// quick ping key, the map or an ability, before anyone sees it, so it can
+// block the ping or mute its voice line. A blocked ping reaches nobody, the
+// sender included: no marker, sound, voice line or chat line. The players a
+// handler lists in MuteVoice, by slot, get the ping without its voice line.
+// The handler runs inside the server's ping, so it decides at once and defers
+// other work to a frame.
+func OnPing(handler func(ping *PingEvent) *PingResult) {
+	registered.pings = append(registered.pings, handler)
 }
 
 // OnDamaged calls handler on the frame after each hit lands.
@@ -323,13 +356,14 @@ func (h *handlers) Start(event *StartEvent) (*StartResult, error) {
 		Damage:  len(h.damages) != 0,
 		Damaged: len(h.damageds) != 0,
 		Chat:    len(h.chats) != 0,
-		Joins:   len(h.joins) != 0 || len(h.leaves) != 0,
+		Joins:   len(h.joins) != 0 || len(h.leaves) != 0 || len(h.aways) != 0 || len(h.returns) != 0,
 		Casts:   len(h.casts) != 0,
 		Kills:   len(h.kills) != 0,
 		Heals:   len(h.heals) != 0,
 		Levels:  len(h.levels) != 0,
 		Melees:  len(h.melees) != 0,
 		Parries: len(h.parries) != 0,
+		Pings:   len(h.pings) != 0,
 
 		ModifierEvents: h.modifierEvents(),
 	}, nil
@@ -444,6 +478,24 @@ func (h *handlers) Damage(event *DamageEvent) (*DamageResult, error) {
 		return &DamageResult{}, nil
 	}
 	return &DamageResult{Amount: &hit.Amount}, nil
+}
+
+// Ping offers the ping to each ping handler, stopping at the first that
+// blocks it; the others add the players they mute its voice line for.
+func (h *handlers) Ping(event *PingEvent) (*PingResult, error) {
+	var muteVoice []int32
+	for _, handler := range h.pings {
+		result := handler(event)
+		if result.GetBlock() {
+			return &PingResult{Block: true}, nil
+		}
+		for _, slot := range result.GetMuteVoice() {
+			if !slices.Contains(muteVoice, slot) {
+				muteVoice = append(muteVoice, slot)
+			}
+		}
+	}
+	return &PingResult{MuteVoice: muteVoice}, nil
 }
 
 // Damaged runs the damaged handlers.
@@ -578,6 +630,14 @@ func (h *handlers) PlayersChanged(event *PlayersChangedEvent) error {
 
 // PlayerJoined runs the join handlers.
 func (h *handlers) PlayerJoined(event *PlayerJoinedEvent) error { return each(h.joins, event) }
+
+// PlayerAway runs the away handlers.
+func (h *handlers) PlayerAway(event *PlayerAwayEvent) error { return each(h.aways, event) }
+
+// PlayerReturned runs the return handlers.
+func (h *handlers) PlayerReturned(event *PlayerReturnedEvent) error {
+	return each(h.returns, event)
+}
 
 // PlayerLeft runs the leave handlers at once, so the leaving player's hero
 // still reads.

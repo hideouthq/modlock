@@ -267,6 +267,11 @@ void ControlLink::RunRequests(WasmHost& mods) {
       case control::ControlRequest::kRoles:
         mods.SetRoles(request.roles());
         break;
+      case control::ControlRequest::kControllers: {
+        const auto& frames = request.controllers();
+        mods.ApplyControllers(frames.player(), frames.frames(), frames.ended());
+        break;
+      }
       case control::ControlRequest::kAnswer: {
         // End the forwarded call the answer names; an unknown id has ended.
         const auto& answer = request.answer();
@@ -372,6 +377,12 @@ void ControlLink::SlowFrame(std::string_view mod, const wasm::profile::SlowFrame
   Push(std::move(event));
 }
 
+void ControlLink::ControllersWanted(const wasm::controllers::ControllerWants& wants) {
+  control::HostEvent event;
+  *event.mutable_controllers_wanted() = wants;
+  Push(std::move(event));
+}
+
 void ControlLink::Ui(std::string_view mod, int32_t slot, const wasm::ui::Change& change) {
   // Report the mod's interface change.
   control::HostEvent event;
@@ -392,9 +403,12 @@ void ControlLink::OnConnected(int32_t slot, uint64_t xuid, bool bot, const char*
   joined->set_slot(slot);
   joined->set_name(name ? name : "");
   joined->set_steam_id(xuid);
-  // The tracker counted this connection before calling, so its generation
-  // is the one mods see in the slot's Connection.
-  joined->set_generation(gameinterop::ConnectionTracker::StateForSlot(slot).generation);
+  // The tracker recorded this connection before calling, so its generation
+  // is the one mods see in the slot's Connection, and its address the one
+  // the client connected from.
+  const auto state = gameinterop::ConnectionTracker::StateForSlot(slot);
+  joined->set_generation(state.generation);
+  joined->set_address(state.address);
   names_[slot] = joined->name();
   Push(std::move(event));
 }

@@ -11,6 +11,7 @@ import {
   type InputValue,
   inputCommand,
   layoutDataChanged,
+  layoutUnloadingAttribute,
   maxActionPayload,
   pressCommand,
 } from './draw.js'
@@ -27,6 +28,7 @@ import {
   type GuardPanel,
 } from './guard.js'
 import { DISPLAY_COVER, DISPLAY_IMAGE, DRAWN_MARK } from './abilities.js'
+import { mountInterfaceLayer } from './mount.js'
 import {
   abilityBarMods,
   abilityRows,
@@ -37,7 +39,6 @@ import {
   hiddenParts,
 } from './hud.js'
 import { decodeUtf8 } from './packed.js'
-import { layoutUnloading } from './data.js'
 import { NativeChanges, savedAttribute } from './native.js'
 import { ScreenHold } from './hold.js'
 import { Frame } from '../stream.pb.js'
@@ -53,7 +54,7 @@ test('unloads layouts before removing, replacing or reloading their ancestors', 
           if (
             count === 0 &&
             panel.valid &&
-            panel.GetAttributeString(layoutUnloading, '') === '1'
+            panel.GetAttributeString(layoutUnloadingAttribute, '') === '1'
           ) {
             expect(panel.parent?.valid).toBe(true)
             observed.set(panel, count + 1)
@@ -136,7 +137,7 @@ test('layout cleanup runs once, survives a failed handler, stops data callbacks 
   expect(layout.native.hide('CitadelHudHeroShop')).toBe(shop)
   layout.native.group().style(shop, { opacity: '0' })
   layout.onUnload(() => calls.push(shop.style.visibility))
-  panel.SetAttributeString(layoutUnloading, '1')
+  panel.SetAttributeString(layoutUnloadingAttribute, '1')
   wake()
   wake()
   panel.SetAttributeString('modlock_data', '42')
@@ -146,7 +147,7 @@ test('layout cleanup runs once, survives a failed handler, stops data callbacks 
   expect(shop.style.opacity).toBeNull()
   expect(shop.GetAttributeString(savedAttribute, '')).toBe('')
   expect(messages).toContain(
-    '[Modlock] layout cleanup failed: Error: test cleanup failure',
+    '[Modlock] layout unload failed: Error: test cleanup failure',
   )
 })
 
@@ -165,42 +166,29 @@ class FakePanel {
     return { x: 100, y: 0 }
   }
   checked = false
+  /**
+   * sheet is what the panel's style sheets draw under its classes: the
+   * game's own switch, which never writes the inline value.
+   */
+  sheet = true
   image = ''
   url = ''
   layout = ''
   valid = true
-  /** css is the visibility the game's own stylesheet gives the panel. */
-  css: 'visible' | 'collapse' | null = null
-  shown = true
-  // As Panorama does: an inline visibility sets visible, clearing it applies
-  // only the game's own CSS, and setting visible writes the inline style.
+  // As Panorama does, a visibility it cannot parse throws.
   readonly style = new Proxy<Record<string, string | null>>(
     {},
     {
       set: (style, name: string, value: string | null | undefined) => {
-        if (name === 'visibility') {
-          if (value === '')
-            throw new Error('Failed to parse style value for visibility')
-          if (value === undefined) throw new Error('Invalid value')
-          const applied = value ?? this.css
-          if (applied !== null) this.shown = applied !== 'collapse'
-        }
+        if (name === 'visibility' && value === '')
+          throw new Error('Failed to parse style value for visibility')
+        if (name === 'visibility' && value === undefined)
+          throw new Error('Invalid value')
         style[name] = value ?? null
         return true
       },
     },
   )
-  get visible() {
-    return this.shown
-  }
-  set visible(value: boolean) {
-    this.style.visibility = value ? 'visible' : 'collapse'
-  }
-  loadCss(css: 'visible' | 'collapse' | null) {
-    this.css = css
-    if (css !== null && (this.style.visibility ?? null) === null)
-      this.shown = css !== 'collapse'
-  }
   events = new Map<string, () => void>()
   attributes = new Map<string, string>()
   classes: string[] = []
@@ -215,6 +203,18 @@ class FakePanel {
     readonly id: string,
     readonly properties?: Record<string, string>,
   ) {}
+
+  /**
+   * visible is Panorama's: it reads the inline visibility over the sheets
+   * and writes the inline value, which then outlives every class change.
+   */
+  get visible() {
+    const inline = this.style.visibility
+    return inline === 'collapse' ? false : inline === 'visible' || this.sheet
+  }
+  set visible(shown: boolean) {
+    this.style.visibility = shown ? 'visible' : 'collapse'
+  }
 
   IsValid() {
     return this.valid
@@ -258,6 +258,9 @@ class FakePanel {
   BLoadLayout(path: string) {
     this.layout = path
     return !path.includes('missing')
+  }
+  FindChild(id: string): FakePanel | null {
+    return this.children.find((panel) => panel.id === id) ?? null
   }
   FindChildTraverse(id: string): FakePanel | null {
     return this.descendants().find((panel) => panel.id === id) ?? null
@@ -1501,11 +1504,11 @@ test("hides the game's HUD parts while a live screen claims them", () => {
   const host = clock()
   const stock = new StockGuard(hud.game, host)
 
-  // Hiding the player's health hides its panels, marked as shown, and keeps
-  // the rest.
+  // Hiding the player's health hides its panels, each marked to go back to
+  // its sheets, and keeps the rest.
   stock.screen(parts('HUD_PART_OWN_HEALTH'))
   expect(hud.bars.visible).toBe(false)
-  expect(hud.bars.attributes.get(HIDDEN_MARK)).toBe('shown')
+  expect(hud.bars.attributes.get(HIDDEN_MARK)).toBe('sheets')
   expect(hud.shields.visible).toBe(false)
   expect(hud.held.visible).toBe(true)
   expect(hud.boon.visible).toBe(true)
@@ -1672,29 +1675,99 @@ test('a handler an earlier script left on the bar sends nothing', () => {
   expect(host.pressed).toEqual(['arena ability:0'])
 })
 
-test('shows again a panel the guard hid only if it showed before', () => {
-  // A panel the game keeps hidden, as gameplay_hud is until a team is
-  // joined, is marked unseen and left hidden on restore.
+test('hands a restored panel back to the game', () => {
+  // A panel the game shows by class follows the class after a restore: the
+  // restore leaves no inline value behind, so a class removed later hides
+  // it. A visible = true restore would pin it shown.
   const hud = gameHud()
-  hud.minimap.visible = false
   const stock = new StockGuard(hud.game, clock())
   stock.screen(parts('HUD_PART_MINIMAP', 'HUD_PART_SOULS'))
-  expect(hud.minimap.attributes.get(HIDDEN_MARK)).toBe('unseen')
-  stock.screen([])
   expect(hud.minimap.visible).toBe(false)
+  stock.screen([])
+  expect(hud.minimap.visible).toBe(true)
+  expect(hud.minimap.style.visibility).toBeNull()
   expect(hud.minimap.attributes.get(HIDDEN_MARK)).toBe('')
+  hud.minimap.sheet = false
+  expect(hud.minimap.visible).toBe(false)
+  hud.minimap.sheet = true
+  expect(hud.minimap.visible).toBe(true)
+
+  // A panel the game hides by class, as gameplay_hud is until a team is
+  // joined, stays hidden after the restore and shows when its class does.
+  hud.souls.sheet = false
+  stock.screen(parts('HUD_PART_SOULS'))
+  stock.screen([])
+  expect(hud.souls.visible).toBe(false)
+  hud.souls.sheet = true
   expect(hud.souls.visible).toBe(true)
 })
 
-test('hides again a panel the game showed again', () => {
-  // The game showing a hidden panel again is undone on the next tick.
+test('keeps a panel the game hid inline hidden after a restore', () => {
+  // The game hides its hero shop by an inline collapse, which the whole
+  // HUD's restore records and writes back.
   const hud = gameHud()
+  const shop = hud.add(hud.game, 'CitadelHudHeroShop')
+  shop.style.visibility = 'collapse'
   const stock = new StockGuard(hud.game, clock())
-  stock.screen(parts('HUD_PART_SOULS'))
-  hud.souls.visible = true
+  stock.screen(parts('HUD_PART_ALL'))
+  expect(shop.attributes.get(HIDDEN_MARK)).toBe('collapse')
+  stock.screen([])
+  expect(shop.style.visibility).toBe('collapse')
+  expect(shop.attributes.get(HIDDEN_MARK)).toBe('')
+})
+
+test('hides again a panel another writer showed again', () => {
+  // A write that shows a hidden panel again is undone on the next tick. On
+  // a named part's panel it is a script's and goes at the restore; on any
+  // other the game's write is recorded, and a newer one stands.
+  const hud = gameHud()
+  const shop = hud.add(hud.game, 'CitadelHudHeroShop')
+  const stock = new StockGuard(hud.game, clock())
+  stock.screen(parts('HUD_PART_ALL'))
+  for (const panel of [hud.souls, shop]) panel.style.visibility = 'visible'
   runScheduled()
   expect(hud.souls.visible).toBe(false)
-  expect(hud.souls.attributes.get(HIDDEN_MARK)).toBe('shown')
+  expect(hud.souls.attributes.get(HIDDEN_MARK)).toBe('sheets')
+  expect(shop.visible).toBe(false)
+  expect(shop.attributes.get(HIDDEN_MARK)).toBe('visible')
+  hud.minimap.style.visibility = 'visible'
+  stock.screen([])
+  expect(hud.souls.style.visibility).toBeNull()
+  expect(hud.minimap.style.visibility).toBeNull()
+  expect(shop.style.visibility).toBe('visible')
+})
+
+test('gives a named part back to its sheets whatever a script left on it', () => {
+  // A script hid the top bar's scores with visible false and pinned its
+  // kill counter, which the game shows on Tab by class, with visible true;
+  // after the guard hides and restores the bar, both draw by their classes.
+  for (const part of ['HUD_PART_TOP_BAR', 'HUD_PART_ALL']) {
+    const hud = gameHud()
+    const bar = hud.scores.GetParent()!
+    const kills = hud.add(bar, '', 'KillsAndAbilityPointsContainer')
+    kills.sheet = false
+    hud.scores.visible = false
+    kills.visible = true
+    const stock = new StockGuard(hud.game, clock())
+    stock.screen(parts(part))
+    expect(hud.scores.visible).toBe(false)
+    expect(kills.visible).toBe(false)
+    stock.screen([])
+    expect(hud.scores.style.visibility).toBeNull()
+    expect(hud.scores.visible).toBe(true)
+    expect(kills.style.visibility).toBeNull()
+    expect(kills.visible).toBe(false)
+    kills.sheet = true
+    expect(kills.visible).toBe(true)
+  }
+
+  // A collapse an earlier release recorded on the bar goes too.
+  const hud = gameHud()
+  hud.scores.style.visibility = 'collapse'
+  hud.scores.attributes.set(HIDDEN_MARK, 'collapse')
+  new StockGuard(hud.game, clock())
+  expect(hud.scores.visible).toBe(true)
+  expect(hud.scores.attributes.get(HIDDEN_MARK)).toBe('')
 })
 
 test('gives the HUD back at once when the player leaves', () => {
@@ -1756,18 +1829,23 @@ test('gives the HUD back when the titles stop for the lease', () => {
 })
 
 test('shows what an earlier guard hid, without its memory', () => {
-  // A reloaded script's guard restores every mark its predecessor left.
+  // A reloaded script's guard restores every mark its predecessor left,
+  // an earlier release's shown mark included, and leaves an unmarked
+  // collapse, which is not the guard's.
   const hud = gameHud()
   new StockGuard(hud.game, clock()).screen(
     parts('HUD_PART_SOULS', 'HUD_PART_TOP_BAR'),
   )
   scheduled.clear()
+  hud.minimap.style.visibility = 'collapse'
+  hud.minimap.attributes.set(HIDDEN_MARK, 'shown')
   hud.clip.style.visibility = 'collapse'
   new StockGuard(hud.game, clock())
   expect(hud.souls.visible).toBe(true)
   expect(hud.scores.visible).toBe(true)
   expect(hud.souls.attributes.get(HIDDEN_MARK)).toBe('')
-  expect(hud.clip.style.visibility).toBeNull()
+  expect(hud.minimap.style.visibility).toBeNull()
+  expect(hud.clip.style.visibility).toBe('collapse')
   expect(scheduled.size).toBe(0)
 })
 
@@ -2129,6 +2207,156 @@ test("hands a mod's routes to each of its layouts", () => {
   ).toBe(false)
 })
 
+test('notifies layouts before deleting them or releasing the screen', () => {
+  // Record every layout marked unloading when PlaySoundEffect fires, while
+  // both the panel and its parent are still valid.
+  const root = new FakePanel('Panel', 'ModlockUi')
+  const notices: FakePanel[] = []
+  const tracked = new Set<FakePanel>()
+  const seen = new Set<FakePanel>()
+  const drawing = new Drawing(
+    {
+      ...$,
+      DispatchEvent(event: string, ...values: unknown[]) {
+        dispatched.push([event, ...values.map(String)])
+        if (event !== 'PlaySoundEffect' || values[0] !== layoutDataChanged) {
+          return
+        }
+        for (const panel of tracked) {
+          if (
+            !seen.has(panel) &&
+            panel.GetAttributeString(layoutUnloadingAttribute, '') === '1'
+          ) {
+            expect(panel.valid).toBe(true)
+            expect(panel.parent?.valid).toBe(true)
+            seen.add(panel)
+            notices.push(panel)
+          }
+        }
+      },
+    },
+    root,
+    () => {},
+    {
+      url: (_mod, path) => `file://arena/${path}`,
+      addon: () => 'arena',
+      unloaded: () => {},
+    },
+  )
+  const tree = (path = 'shop.xml', sheets: string[] = []) =>
+    screen(
+      { id: '', sheets, children: ['box', 'keep'] },
+      { id: 'box', children: ['shop'] },
+      { id: 'shop', kind: 'KIND_LAYOUT', layout: path },
+      { id: 'keep', kind: 'KIND_LAYOUT', layout: 'keep.xml' },
+    )
+  const layoutPanels = () => {
+    const modRoot = root.children[0]!
+    const holder =
+      modRoot.children[0]?.id === 'ModlockUiSheet'
+        ? modRoot.children[0]
+        : modRoot
+    const shop = holder.children[0]!.children[0]!
+    const keep = holder.children[1]!
+    tracked.add(shop)
+    tracked.add(keep)
+    return { shop, keep }
+  }
+
+  const expectNotified = (...panels: FakePanel[]) => {
+    expect(notices).toHaveLength(panels.length)
+    expect(new Set(notices)).toEqual(new Set(panels))
+    notices.length = 0
+  }
+
+  // Removing an ancestor notifies the nested layout before deleting the box,
+  // and leaves a sibling layout alone.
+  drawing.draw(tree())
+  const first = layoutPanels()
+  drawing.draw(
+    screen(
+      { id: '', children: ['keep'] },
+      { id: 'keep', kind: 'KIND_LAYOUT', layout: 'keep.xml' },
+    ),
+  )
+  expectNotified(first.shop)
+  expect(first.shop.parent?.valid).toBe(false)
+  expect(first.keep.attributes.has(layoutUnloadingAttribute)).toBe(false)
+
+  // Replacing a layout in place notifies the old one before creating the new.
+  drawing.draw(tree('shop.xml'))
+  const second = layoutPanels()
+  drawing.draw(tree('other.xml'))
+  const third = layoutPanels()
+  expectNotified(second.shop)
+  expect(third.shop).not.toBe(second.shop)
+  expect(third.shop.attributes.has(layoutUnloadingAttribute)).toBe(false)
+
+  // Replacing the root through style sheets notifies layouts nested under its
+  // sheet panels once before the old root goes.
+  dispatched.length = 0
+  drawing.draw(tree('other.xml', ['a.css', 'b.css']))
+  const sheeted = layoutPanels()
+  expectNotified(third.shop, third.keep)
+  expect(dispatched).toEqual([['PlaySoundEffect', layoutDataChanged]])
+  dispatched.length = 0
+  drawing.draw(tree('other.xml', ['a.css']))
+  const unnested = layoutPanels()
+  expectNotified(sheeted.shop, sheeted.keep)
+  expect(dispatched).toEqual([['PlaySoundEffect', layoutDataChanged]])
+
+  // Reloading a tree's generation notifies every layout in the old tree.
+  const reloaded = tree('other.xml', ['a.css'])
+  reloaded.trees![0]!.generation = 2n
+  drawing.draw(reloaded)
+  const afterReload = layoutPanels()
+  expectNotified(unnested.shop, unnested.keep)
+
+  // Dropping the mod notifies its layouts before deleting its root.
+  drawing.draw(null)
+  expectNotified(afterReload.shop, afterReload.keep)
+
+  // Releasing on disconnect notifies once; repeating release or drawing null
+  // after sends no extra wake.
+  drawing.draw(tree())
+  const released = layoutPanels()
+  dispatched.length = 0
+  drawing.release()
+  drawing.release()
+  drawing.draw(null)
+  expectNotified(released.shop, released.keep)
+  expect(dispatched).toEqual([['PlaySoundEffect', layoutDataChanged]])
+
+  // Drawing the same screen again after release replaces the unloaded layouts
+  // with fresh panels without sending another wake, and dropping them notifies
+  // the replacements.
+  drawing.draw(tree())
+  const stale = layoutPanels()
+  drawing.release()
+  expectNotified(stale.shop, stale.keep)
+  dispatched.length = 0
+  drawing.draw(tree())
+  const fresh = layoutPanels()
+  expect(fresh.shop).not.toBe(stale.shop)
+  expect(fresh.keep).not.toBe(stale.keep)
+  expect(fresh.shop.attributes.has(layoutUnloadingAttribute)).toBe(false)
+  expect(fresh.keep.attributes.has(layoutUnloadingAttribute)).toBe(false)
+  expect(dispatched).toEqual([])
+  drawing.draw(null)
+  expectNotified(fresh.shop, fresh.keep)
+
+  // A layout that failed to load gets no unload notice when removed.
+  dispatched.length = 0
+  drawing.draw(
+    screen(
+      { id: '', children: ['bad'] },
+      { id: 'bad', kind: 'KIND_LAYOUT', layout: 'missing.xml' },
+    ),
+  )
+  drawing.draw(null)
+  expect(dispatched).toEqual([])
+})
+
 test('reads screens in acknowledged parts', () => {
   // Start a bridge on a fake state panel, which loads the bridge page.
   const state = new FakePanel('HTML', 'ModlockUiState')
@@ -2347,7 +2575,7 @@ test("a released visibility leaves each panel to the game's own CSS", () => {
   const slot1 = add(hud, 'slot_signature_1')
   const slot2 = add(hud, 'slot_signature_2')
   const minimap = add(hud, 'minimap_persp')
-  minimap.loadCss('collapse')
+  minimap.sheet = false
   const first = new NativeChanges($, () => hud)
   first.hide(slot1)
   first.set(slot2, { visible: false })
@@ -2375,9 +2603,9 @@ test("a screen end unloads layouts and leaves the HUD to the game's CSS", () => 
   const scores = add(add(game, 'TopBar'), 'TeamScores')
   const shop = add(game, 'CitadelHudHeroShop')
   const minimap = add(game, 'minimap_persp')
-  minimap.loadCss('visible')
+  minimap.sheet = true
   const testing = add(game, 'hud_hero_testing')
-  testing.loadCss('collapse')
+  testing.sheet = false
 
   const events: string[] = []
   const mode = new NativeChanges($, () => game)
@@ -2385,7 +2613,7 @@ test("a screen end unloads layouts and leaves the HUD to the game's CSS", () => 
   const layouts = new AddonLayouts()
   const releaseModeOnUnload = () => {
     const layout = root.descendants().find((panel) => panel.layout !== '')
-    if (layout?.GetAttributeString(layoutUnloading, '') === '1') {
+    if (layout?.GetAttributeString(layoutUnloadingAttribute, '') === '1') {
       events.push(`unloading, shop shown ${shop.visible}`)
       mode.release()
     }
@@ -2428,8 +2656,8 @@ test("a screen end unloads layouts and leaves the HUD to the game's CSS", () => 
   for (const panel of game.descendants())
     expect(panel.GetAttributeString(savedAttribute, '')).toBe('')
 
-  minimap.loadCss('collapse')
-  testing.loadCss('visible')
+  minimap.sheet = false
+  testing.sheet = true
   expect([minimap.visible, testing.visible]).toEqual([false, true])
 })
 
@@ -2451,7 +2679,7 @@ test('the guard leaves a panel whose visibility a layout holds to the layout', (
   // A layout that hides a panel the guard hid keeps it hidden after the
   // guard gives it back, and its release leaves it to the game's CSS.
   stock.screen(parts('HUD_PART_MINIMAP'))
-  expect(hud.minimap.attributes.get(HIDDEN_MARK)).toBe('shown')
+  expect(hud.minimap.attributes.get(HIDDEN_MARK)).toBe('sheets')
   layout.hide(hud.minimap)
   stock.leave()
   expect(hud.minimap.visible).toBe(false)
@@ -2485,7 +2713,7 @@ test('layouts unload and release their native changes when the guard gives the H
       ...$,
       DispatchEvent: () => {
         for (const [panel, owner] of owners) {
-          if (panel.GetAttributeString(layoutUnloading, '') === '1') {
+          if (panel.GetAttributeString(layoutUnloadingAttribute, '') === '1') {
             owner.release()
             owners.delete(panel)
           }
@@ -2949,4 +3177,38 @@ test('finds pips the game makes apart from the icons by where they sit', () => {
   expect(bar[0]!.train.style.visibility ?? null).toBeNull()
   host.click(bar[3]!.pips)
   expect(host.pressed).toEqual(['arena ability:3'])
+})
+
+test('the interface layer mounts under the HUD tooltips it can reach', () => {
+  const adopt = (parent: FakePanel, child: FakePanel) => {
+    child.parent = parent
+    parent.children.push(child)
+    return child
+  }
+  const create = (type: string, parent: FakePanel, id: string) =>
+    adopt(parent, new FakePanel(type, id))
+
+  // The game's HUD holds its TooltipManager as a direct child, so the layer
+  // goes just before it.
+  const hud = new FakePanel('CitadelHud', 'Hud')
+  const context = adopt(hud, new FakePanel('Panel', 'Context'))
+  adopt(hud, new FakePanel('CitadelTooltipManager', 'TooltipManager'))
+  adopt(hud, new FakePanel('Panel', 'LoadInFadeCover'))
+  mountInterfaceLayer(create, context, 'ModlockUi')
+  expect(hud.children.map((panel) => panel.id)).toEqual([
+    'Context',
+    'ModlockUi',
+    'TooltipManager',
+    'LoadInFadeCover',
+  ])
+
+  // A tree whose TooltipManager is not the top's child keeps the layer last.
+  const top = new FakePanel('Panel', 'Top')
+  const db = adopt(top, new FakePanel('CitadelDB', 'Dashboard'))
+  adopt(db, new FakePanel('CitadelTooltipManager', 'TooltipManager'))
+  mountInterfaceLayer(create, db, 'ModlockUi')
+  expect(top.children.map((panel) => panel.id)).toEqual([
+    'Dashboard',
+    'ModlockUi',
+  ])
 })

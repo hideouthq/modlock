@@ -42,6 +42,11 @@ modlock.Buttons = {
 	ability3 = 2 ^ 35,
 	-- ultimate is the hero's ultimate ability key, the fourth.
 	ultimate = 2 ^ 36,
+	-- item1 to item4 are the hero's four active item keys.
+	item1 = 2 ^ 37,
+	item2 = 2 ^ 38,
+	item3 = 2 ^ 39,
+	item4 = 2 ^ 40,
 	-- parry is the melee parry button.
 	parry = 2 ^ 42,
 	-- specNext to specToggleTeam are the buttons a player's client sends in
@@ -77,7 +82,7 @@ modlock.Layers = {
 }
 
 -- has reports whether bits, a sum of Buttons or Layers bits, holds bit.
--- bit32 reaches only the low 32 bits, and these bits go up to 2^42.
+-- bit32 reaches only the low 32 bits, and these bits go up to 2^52.
 function modlock.has(bits: number, bit: number): boolean
 	return bits // bit % 2 == 1
 end
@@ -124,6 +129,9 @@ export type MatchOptions = {
 export type ScoreOptions = MatchOptions & {
 	-- tiebreak ranks equal values, lower first, such as fewer deaths.
 	tiebreak: number?,
+	-- teammates are the scoring player's teammates on a board that ranks
+	-- teams, each enrolled with bindScorePlayer: the board's teamSize less one.
+	teammates: { ScorePlayer }?,
 }
 
 -- ScorePlayer is a human connection enrolled for reporting.
@@ -152,9 +160,21 @@ export type BoardRead = {
 	limit: number?,
 	-- player asks for this connection's own row too.
 	player: Connection?,
+	-- teammates name the player's teammates on a board that ranks teams, so
+	-- the page's player row is their team's; each is in the game now.
+	teammates: { Connection }?,
 }
 
--- BoardRow is one player's place on a board.
+-- BoardMember is one player of a team's row.
+export type BoardMember = {
+	-- steamId is the player's 64-bit Steam ID in decimal.
+	steamId: string,
+	name: string,
+}
+
+-- BoardRow is one player's place on a board, or a team's on a board that
+-- ranks teams: its members then, ordered by SteamID64, with steamId and name
+-- the first member's.
 export type BoardRow = {
 	rank: number,
 	-- steamId is the player's 64-bit Steam ID in decimal.
@@ -163,6 +183,7 @@ export type BoardRow = {
 	value: number,
 	tiebreak: number,
 	count: number,
+	members: { BoardMember },
 }
 
 -- BoardPage is a page of a board.
@@ -188,6 +209,24 @@ function modlock.bindScorePlayer(connection: Connection): ScorePlayer?
 	return wire.decode(schema, "ScoreConnection", reply) :: ScorePlayer
 end
 
+-- teammatesOf encodes a team score's enrolled teammates.
+local function teammatesOf(teammates: { ScorePlayer }?): { any }
+	local encoded = {}
+	for _, teammate in teammates or {} do
+		table.insert(encoded, { player = Player.new(teammate.slot), connection = teammate })
+	end
+	return encoded
+end
+
+-- readTeammatesOf encodes a team read's live teammates.
+local function readTeammatesOf(teammates: { Connection }?): { any }
+	local encoded = {}
+	for _, teammate in teammates or {} do
+		table.insert(encoded, { player = teammate.player, connection = scoreIdentity(teammate) })
+	end
+	return encoded
+end
+
 -- reportScore reports the enrolled player's result and answers on a later frame.
 function modlock.reportScore(player: ScorePlayer, board: string, value: number, done: ScoreDone, options: ScoreOptions?)
 	local o: ScoreOptions = options or {}
@@ -201,6 +240,7 @@ function modlock.reportScore(player: ScorePlayer, board: string, value: number, 
 		key = o.key,
 		earnedAtUnixMillis = math.round(o.earnedAt or 0),
 		evidence = o.evidence,
+		teammates = teammatesOf(o.teammates),
 	})
 	modlock.callServiceLater(scoresService, "Report", report, function(_, err)
 		done(err)
@@ -242,6 +282,7 @@ function modlock.readBoard(board: string, read: BoardRead, done: (BoardPage?, st
 		limit = r.limit,
 		player = if r.player then r.player.player else nil,
 		connection = if r.player then scoreIdentity(r.player) else nil,
+		teammates = readTeammatesOf(r.teammates),
 	})
 	modlock.callServiceLater(scoresService, "Read", query, function(reply, err)
 		if reply == nil then
@@ -278,12 +319,15 @@ local frames: { (frame: FrameEvent) -> () } = {}
 local chats: { (line: ChatEvent) -> () } = {}
 local joins: { (joined: PlayerJoinedEvent) -> () } = {}
 local leaves: { (left: PlayerLeftEvent) -> () } = {}
+local aways: { (away: PlayerAwayEvent) -> () } = {}
+local returns: { (returned: PlayerReturnedEvent) -> () } = {}
 local worlds: { (map: string) -> () } = {}
 local inputs: { (player: Player, pressed: number, released: number) -> () } = {}
 local restoreds: { (player: Player, error: string?) -> () } = {}
 local npcsRestoreds: { (error: string?) -> () } = {}
 local damages: { (hit: DamageEvent) -> DamageResult? } = {}
 local damageds: { (hit: DamagedEvent) -> () } = {}
+local pings: { (ping: PingEvent) -> PingResult? } = {}
 local kills: { (kill: KillEvent) -> () } = {}
 local abilityCasts: { (cast: AbilityCastEvent) -> () } = {}
 local heals: { (heal: HealEvent) -> () } = {}
@@ -918,7 +962,7 @@ function modlock.command(name: string, handler: (player: Player, args: string) -
 end
 
 -- onStart calls handler once when the server starts the mod, with the
--- arguments that follow -- on the modlock-host command line.
+-- words after -- on the modlock dev or play command line.
 function modlock.onStart(handler: (args: { string }) -> ())
 	table.insert(starts, handler)
 end
@@ -1106,10 +1150,29 @@ function modlock.onPlayerJoin(handler: (joined: PlayerJoinedEvent) -> ())
 	table.insert(joins, handler)
 end
 
+-- onPlayerAway calls handler once each time a joined human's client
+-- disconnects while the server holds their seat. They have not left: their
+-- hero and controller stay in the game, and onPlayerReturn follows if they
+-- come back, so keep their seat as it stands rather than clear it.
+function modlock.onPlayerAway(handler: (away: PlayerAwayEvent) -> ())
+	table.insert(aways, handler)
+end
+
+-- onPlayerReturn calls handler once each time an away player reconnects to
+-- their seat and finishes joining again, with the same Player, generation and
+-- hero they left.
+function modlock.onPlayerReturn(handler: (returned: PlayerReturnedEvent) -> ())
+	table.insert(returns, handler)
+end
+
 -- onPlayerLeave calls handler once for each joined player who leaves the mod,
--- with the reason the server dropped them when it gave one. A player who
--- disconnects still has their slot and hero during the call. A player the
--- mod stops serving leaves too, with disconnected false.
+-- with the reason the server dropped them when it gave one. A seat ends, and
+-- its player leaves, when a bot is removed, a human is kicked or released by
+-- the program that runs the host, or a human stays away past the game's
+-- limit; a human who only disconnects is away first. The slot and hero still
+-- read during the call, and afterwards Modlock kills the hero, keeps it down
+-- and takes the controller off its team, so the mod need not clear them. A
+-- player the mod stops serving leaves too, with disconnected false.
 function modlock.onPlayerLeave(handler: (left: PlayerLeftEvent) -> ())
 	table.insert(leaves, handler)
 end
@@ -1252,6 +1315,17 @@ local function respawned(player: Player)
 	end
 end
 
+-- onPing calls handler with each ping a player sends, from the comms wheel, a
+-- quick ping key, the map or an ability, before anyone sees it, so it can
+-- block the ping or mute its voice line. A blocked ping reaches nobody, the
+-- sender included: no marker, sound, voice line or chat line. The players a
+-- handler lists in muteVoice, by slot, get the ping without its voice line.
+-- The handler runs inside the server's ping, so it decides at once and defers
+-- other work to a frame.
+function modlock.onPing(handler: (ping: PingEvent) -> PingResult?)
+	table.insert(pings, handler)
+end
+
 -- onDamaged calls handler on the frame after each hit lands.
 function modlock.onDamaged(handler: (hit: DamagedEvent) -> ())
 	table.insert(damageds, handler)
@@ -1355,13 +1429,14 @@ local handlers: ModHandlers = {
 			damage = #damages ~= 0,
 			damaged = #damageds ~= 0,
 			chat = #chats ~= 0,
-			joins = #joins ~= 0 or #leaves ~= 0,
+			joins = #joins ~= 0 or #leaves ~= 0 or #aways ~= 0 or #returns ~= 0,
 			casts = #abilityCasts ~= 0,
 			kills = #kills ~= 0,
 			heals = #heals ~= 0,
 			levels = #levels ~= 0,
 			melees = #melees ~= 0,
 			parries = #parries ~= 0,
+			pings = #pings ~= 0,
 			modifierEvents = watched,
 		}
 	end,
@@ -1454,6 +1529,26 @@ local handlers: ModHandlers = {
 
 		-- Answer nothing when no handler changed the hit.
 		return if amount == event.amount then {} else { amount = amount }
+	end,
+
+	ping = function(event)
+		-- The first handler that blocks the ping ends its dispatch; the others
+		-- add the players they mute its voice line for.
+		local muted: { [number]: boolean } = {}
+		local muteVoice: { number } = {}
+		for _, handler in pings do
+			local result = handler(event)
+			if result and result.block then
+				return { block = true }
+			end
+			for _, slot in (result and result.muteVoice) or {} do
+				if not muted[slot] then
+					muted[slot] = true
+					table.insert(muteVoice, slot)
+				end
+			end
+		end
+		return { block = false, muteVoice = muteVoice }
 	end,
 
 	damaged = function(event)
@@ -1573,6 +1668,18 @@ local handlers: ModHandlers = {
 	-- A join and a leave run at once, so the leaving player's hero still reads.
 	playerJoined = function(event)
 		for _, handler in joins do
+			handler(event)
+		end
+	end,
+
+	playerAway = function(event)
+		for _, handler in aways do
+			handler(event)
+		end
+	end,
+
+	playerReturned = function(event)
+		for _, handler in returns do
 			handler(event)
 		end
 	end,

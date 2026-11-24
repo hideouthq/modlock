@@ -705,7 +705,11 @@ export function Fragment(props: { children?: Child }): Child {
 
 /**
  * show replaces the interface the mod shows player with root. A player who
- * left and a mod that restarted show nothing until the next call.
+ * left and a mod that restarted show nothing until the next call. An element
+ * shown again as the same object at the same place reuses what it laid out
+ * last time without laying it out again, so a mod may keep a subtree whose
+ * inputs have not changed and pass it again; an element's props must not
+ * change after it is shown.
  */
 export function show(player: Player, root: Child): boolean {
   views.set(player.slot, { ...view(player), root })
@@ -938,6 +942,20 @@ export function hide(player: Player): boolean {
  */
 export function joined(player: Player): void {
   if (everyoneHud.length !== 0) draw(player)
+}
+
+/**
+ * away forgets the screen of a player whose client disconnected, since the
+ * client lost it; returned sends it whole again when they come back. What
+ * the mod shows them, such as their notices, stays.
+ */
+export function away(player: Player): void {
+  screens.delete(player.slot)
+}
+
+/** returned draws the whole screen of a player who came back. */
+export function returned(player: Player): void {
+  draw(player)
 }
 
 /**
@@ -1192,8 +1210,8 @@ function draw(player: Player, changed: readonly Layer[] = layers): boolean {
  * laying out only the changed layers.
  */
 function drawAll(changed: readonly Layer[] = layers): void {
-  for (const { player } of players()) {
-    draw(player, changed)
+  for (const { player, away } of players()) {
+    if (!away) draw(player, changed)
   }
 }
 
@@ -1344,8 +1362,26 @@ interface Part {
     string,
     { readonly handler: (player: Player, wheel: Wheel) => void }
   >
+  /**
+   * placed maps each element's place to the element drawn there and what it
+   * laid out, so the same element drawn there again reuses it.
+   */
+  readonly placed: Map<string, Placed>
   /** top lists the ids of the layer's outermost nodes, the root's children. */
   top: string[]
+}
+
+/** Placed is what one element laid out in a part. */
+interface Placed {
+  readonly element: UiElement
+  /** top lists the ids of the element's outermost nodes, as place returns. */
+  readonly top: string[]
+  /** places lists the places in the element's subtree that have an id. */
+  readonly places: string[]
+  /** nodes lists the ids of the nodes in the element's subtree. */
+  readonly nodes: string[]
+  /** elements lists the places of the elements in the subtree, itself last. */
+  readonly elements: string[]
 }
 
 /** Screen is what one player's interface holds: the root and its layers. */
@@ -1378,11 +1414,20 @@ class Layout {
   readonly part: Part
   private readonly previous: Part | undefined
   private readonly screen: Screen
+  // The logs list, in order, each place given an id, each node added and each
+  // element placed, so an element's subtree is the stretch its placing added.
+  private readonly placesLog: string[]
+  private readonly nodesLog: string[]
+  private readonly elementsLog: string[]
 
   /** The layout keeps previous's ids and numbers new nodes from screen's counter. */
   constructor(previous: Part | undefined, screen: Screen) {
+    // Start with empty logs and an empty part.
     this.previous = previous
     this.screen = screen
+    this.placesLog = []
+    this.nodesLog = []
+    this.elementsLog = []
     this.part = {
       nodes: new Map(),
       ids: new Map(),
@@ -1390,6 +1435,7 @@ class Layout {
       changes: new Map(),
       actions: new Map(),
       wheels: new Map(),
+      placed: new Map(),
       top: [],
     }
   }
@@ -1406,15 +1452,81 @@ class Layout {
         : { ...node, steamId: String(node.steamId) }
     const encoded = JSON.stringify(value)
     this.part.nodes.set(node.id!, { node, encoded })
+    this.nodesLog.push(node.id!)
+  }
+
+  /**
+   * reuse carries over what element laid out at place last time when the
+   * previous part drew the same element object there, and returns its top
+   * ids; otherwise it returns undefined. The copy touches each node of the
+   * subtree once and encodes none of them.
+   */
+  reuse(element: UiElement, place: string): string[] | undefined {
+    // Only the same element object at the same place is unchanged.
+    const previous = this.previous
+    const placed = previous?.placed.get(place)
+    if (!previous || placed?.element !== element) return undefined
+
+    // Carry over its ids, nodes with their handlers, and the elements in it.
+    const part = this.part
+    for (const at of placed.places) {
+      part.ids.set(at, previous.ids.get(at)!)
+      this.placesLog.push(at)
+    }
+    for (const id of placed.nodes) {
+      part.nodes.set(id, previous.nodes.get(id)!)
+      this.nodesLog.push(id)
+      const press = previous.presses.get(id)
+      if (press) part.presses.set(id, press)
+      const change = previous.changes.get(id)
+      if (change) part.changes.set(id, change)
+      const action = previous.actions.get(id)
+      if (action) part.actions.set(id, action)
+      const wheel = previous.wheels.get(id)
+      if (wheel) part.wheels.set(id, wheel)
+    }
+    for (const at of placed.elements) {
+      part.placed.set(at, previous.placed.get(at)!)
+      this.elementsLog.push(at)
+    }
+    return placed.top
+  }
+
+  /** mark notes where the logs end, before placing an element. */
+  mark(): [number, number, number] {
+    return [
+      this.placesLog.length,
+      this.nodesLog.length,
+      this.elementsLog.length,
+    ]
+  }
+
+  /** placed records that element, laid out at place since mark, made top. */
+  placed(
+    element: UiElement,
+    place: string,
+    mark: [number, number, number],
+    top: string[],
+  ): void {
+    this.elementsLog.push(place)
+    this.part.placed.set(place, {
+      element,
+      top,
+      places: this.placesLog.slice(mark[0]),
+      nodes: this.nodesLog.slice(mark[1]),
+      elements: this.elementsLog.slice(mark[2]),
+    })
   }
 
   /** id returns the node id for the element at place. */
   id(place: string): string {
+    // Keep the id the place had, or number a new node.
     let found = this.previous?.ids.get(place)
     if (found === undefined) {
       found = (this.screen.next++).toString(36)
     }
     this.part.ids.set(place, found)
+    this.placesLog.push(place)
     return found
   }
 }
@@ -1444,27 +1556,27 @@ function place(layout: Layout, child: Child, at: string): string[] {
     layout.add(node)
     return [node.id!]
   }
-  if (child.type === fragment) {
-    return place(layout, child.props.children, `${at}>`)
-  }
 
-  // Draw an intrinsic element.
+  // Reuse an element drawn there last time, or lay it out and note what it
+  // made.
+  const reused = layout.reuse(child, at)
+  if (reused) return reused
+  const mark = layout.mark()
+  const top =
+    child.type === fragment
+      ? place(layout, child.props.children, `${at}>`)
+      : intrinsic(layout, child, at)
+  layout.placed(child, at, mark, top)
+  return top
+}
+
+/** intrinsic lays out an intrinsic element at place in layout. */
+function intrinsic(layout: Layout, child: UiElement, at: string): string[] {
+  // Build the node's common fields, then its kind's.
   const props = child.props
-  const node: Node = {
-    id: layout.id(at),
-    style: wireStyle(props.style),
-    hover: wireStyle(props.hover),
-    tooltip: props.tooltip,
-    item: props.item ? itemId(props.item) : undefined,
-    ability: props.ability?.name ? itemId(props.ability.name) : undefined,
-    abilityPlayer: props.ability?.name ? props.ability.player.slot : undefined,
-    hoverSound: props.hoverSound,
-    enter: wireStyle(props.enter),
-    exit: wireStyle(props.exit),
-    cycle: cycle(props.cycle),
-    classes: classes(props.class),
-    hideInChat: props.hideInChat || undefined,
-  }
+  const node = denseRecords
+    ? denseNode(layout, props, at)
+    : sparseNode(layout, props, at)
   switch (child.type) {
     case 'label':
       node.kind = Kind.LABEL
@@ -1519,6 +1631,49 @@ function place(layout: Layout, child: Child, at: string): string[] {
   }
   layout.add(node)
   return [node.id!]
+}
+
+/** sparseNode builds a node's common fields, only those props sets. */
+function sparseNode(layout: Layout, props: Props, at: string): Node {
+  // Name the node and style it.
+  const node: Node = { id: layout.id(at) }
+  if (props.style !== undefined) node.style = wireStyle(props.style)
+  if (props.hover !== undefined) node.hover = wireStyle(props.hover)
+  if (props.enter !== undefined) node.enter = wireStyle(props.enter)
+  if (props.exit !== undefined) node.exit = wireStyle(props.exit)
+  if (props.cycle !== undefined) node.cycle = cycle(props.cycle)
+  if (props.class !== undefined) node.classes = classes(props.class)
+
+  // Give it what it shows on hover, the item or ability it names, and
+  // whether chat hides it.
+  if (props.tooltip !== undefined) node.tooltip = props.tooltip
+  if (props.hoverSound !== undefined) node.hoverSound = props.hoverSound
+  if (props.item) node.item = itemId(props.item)
+  if (props.ability?.name) {
+    node.ability = itemId(props.ability.name)
+    node.abilityPlayer = props.ability.player.slot
+  }
+  if (props.hideInChat) node.hideInChat = true
+  return node
+}
+
+/** denseNode builds a node's common fields, every one present (useDenseUiRecords). */
+function denseNode(layout: Layout, props: Props, at: string): Node {
+  return {
+    id: layout.id(at),
+    style: wireStyle(props.style),
+    hover: wireStyle(props.hover),
+    tooltip: props.tooltip,
+    item: props.item ? itemId(props.item) : undefined,
+    ability: props.ability?.name ? itemId(props.ability.name) : undefined,
+    abilityPlayer: props.ability?.name ? props.ability.player.slot : undefined,
+    hoverSound: props.hoverSound,
+    enter: wireStyle(props.enter),
+    exit: wireStyle(props.exit),
+    cycle: cycle(props.cycle),
+    classes: classes(props.class),
+    hideInChat: props.hideInChat || undefined,
+  }
 }
 
 /** classes splits an element's class into its names, or undefined for none. */
@@ -1839,11 +1994,124 @@ const easings = {
   linear: Easing.LINEAR,
 } as const
 
-/** wireStyle encodes style. */
+/**
+ * denseRecords lays each node and style out with every field present, most of
+ * them undefined, as the interface did before it built them sparse. The
+ * encoding and the bytes sent are the same either way; useDenseUiRecords
+ * selects it to compare.
+ */
+let denseRecords = false
+
+/**
+ * useDenseUiRecords makes the interface build each node and style record with
+ * every field present, as it once did, instead of only the fields set. The
+ * screens and the bytes sent do not change; only the cost of building and
+ * encoding them does, so this exists to compare the two and to step back.
+ */
+export function useDenseUiRecords(dense: boolean): void {
+  denseRecords = dense
+}
+
+/**
+ * wireStyle encodes style with only the fields style sets. Its records hold
+ * them in another order than denseStyle's, which the bytes sent do not show:
+ * protobuf writes fields in number order, and the encodings the diff compares
+ * come from one builder at a time.
+ */
 function wireStyle(style: Style | undefined): WireStyle | undefined {
+  // No style, or the dense form, needs no sparse record.
   if (!style) {
     return undefined
   }
+  if (denseRecords) {
+    return denseStyle(style)
+  }
+  const out: WireStyle = {}
+
+  // Size the box.
+  if (style.width !== undefined) out.width = length(style.width)
+  if (style.height !== undefined) out.height = length(style.height)
+  if (style.minWidth !== undefined) out.minWidth = length(style.minWidth)
+  if (style.maxWidth !== undefined) out.maxWidth = length(style.maxWidth)
+  if (style.minHeight !== undefined) out.minHeight = length(style.minHeight)
+  if (style.maxHeight !== undefined) out.maxHeight = length(style.maxHeight)
+
+  // Place it and its children.
+  if (style.x !== undefined) out.x = length(style.x)
+  if (style.y !== undefined) out.y = length(style.y)
+  if (style.zIndex !== undefined) out.zIndex = style.zIndex
+  if (style.flow !== undefined) out.flow = flows[style.flow]
+  if (style.horizontalAlign !== undefined) {
+    out.horizontalAlign = align(style.horizontalAlign)
+  }
+  if (style.verticalAlign !== undefined) {
+    out.verticalAlign = align(style.verticalAlign)
+  }
+  if (style.margin !== undefined) out.margin = edges(style.margin)
+  if (style.padding !== undefined) out.padding = edges(style.padding)
+
+  // Clip and turn it.
+  const overflowX = style.overflowX ?? style.overflow
+  if (overflowX !== undefined) out.overflowX = overflow(overflowX)
+  const overflowY = style.overflowY ?? style.overflow
+  if (overflowY !== undefined) out.overflowY = overflow(overflowY)
+  if (style.clip !== undefined) out.clip = clip(style.clip)
+  if (style.turn !== undefined) out.turn = style.turn
+
+  // Paint the box.
+  if (style.background !== undefined) out.background = color(style.background)
+  if (style.borderRadius !== undefined) out.borderRadius = style.borderRadius
+  if (style.borderWidth !== undefined) out.borderWidth = style.borderWidth
+  if (style.borderColor !== undefined) {
+    out.borderColor = color(style.borderColor)
+  }
+  if (style.opacity !== undefined) out.opacity = style.opacity
+  if (style.gradient !== undefined) out.gradient = gradient(style.gradient)
+  if (style.boxShadow !== undefined) out.boxShadow = shadow(style.boxShadow)
+  if (style.tint !== undefined) out.tint = color(style.tint)
+
+  // Filter what it draws.
+  if (style.saturation !== undefined) out.saturation = style.saturation
+  if (style.brightness !== undefined) out.brightness = style.brightness
+  if (style.contrast !== undefined) out.contrast = style.contrast
+  if (style.blur !== undefined) out.blur = style.blur
+
+  // Set the text's color, size and face.
+  if (style.color !== undefined) out.color = color(style.color)
+  if (style.fontSize !== undefined) out.fontSize = style.fontSize
+  if (style.bold !== undefined) out.bold = style.bold
+  if (style.textAlign !== undefined) out.textAlign = align(style.textAlign)
+  if (style.face !== undefined) out.face = faces[style.face]
+  if (style.uppercase !== undefined) out.uppercase = style.uppercase
+  if (style.letterSpacing !== undefined) {
+    out.letterSpacing = style.letterSpacing
+  }
+  if (style.shadow !== undefined) out.shadow = style.shadow
+
+  // Set the text's weight, lines and marks.
+  if (style.italic !== undefined) out.italic = style.italic
+  if (style.weight !== undefined) out.weight = weights[style.weight]
+  if (style.lineHeight !== undefined) out.lineHeight = style.lineHeight
+  if (style.noWrap !== undefined) out.noWrap = style.noWrap
+  if (style.textOverflow !== undefined) {
+    out.textOverflow = textOverflows[style.textOverflow]
+  }
+  if (style.decoration !== undefined) {
+    out.decoration = decorations[style.decoration]
+  }
+  if (style.textShadow !== undefined) out.textShadow = shadow(style.textShadow)
+
+  // Move and animate it.
+  const moved = transform(style)
+  if (moved !== undefined) out.transform = moved
+  if (style.transition !== undefined) {
+    out.transition = transition(style.transition)
+  }
+  return out
+}
+
+/** denseStyle encodes style with every field present (useDenseUiRecords). */
+function denseStyle(style: Style): WireStyle {
   return {
     width: length(style.width),
     height: length(style.height),
@@ -2006,9 +2274,33 @@ function edges(value: Edges | undefined): WireEdges | undefined {
   return { top: value[0], right: value[1], bottom: value[2], left: value[3] }
 }
 
+/**
+ * colors caches each color string's encoding, since a screen names the same few
+ * colors on many nodes; it empties when it reaches maxColors, so a mod that
+ * computes its colors cannot grow it without bound.
+ */
+const colors = new Map<string, number>()
+const maxColors = 1024
+
 /** color encodes '#rrggbb' or '#rrggbbaa' as 0xRRGGBBAA. */
 function color(value: string | undefined): number | undefined {
-  const hex = value?.replace(/^#/, '')
+  // No color, or the dense form, skips the cache.
+  if (value === undefined) return undefined
+  if (denseRecords) return parseColor(value)
+
+  // A string that is no color is cached as -1, which no color encodes to.
+  let parsed = colors.get(value)
+  if (parsed === undefined) {
+    if (colors.size >= maxColors) colors.clear()
+    parsed = parseColor(value) ?? -1
+    colors.set(value, parsed)
+  }
+  return parsed < 0 ? undefined : parsed
+}
+
+/** parseColor parses '#rrggbb' or '#rrggbbaa', or returns undefined. */
+function parseColor(value: string): number | undefined {
+  const hex = value.replace(/^#/, '')
   if (!hex || !/^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(hex)) {
     return undefined
   }

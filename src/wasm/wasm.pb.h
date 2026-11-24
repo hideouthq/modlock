@@ -44,6 +44,7 @@
 #include "match.pb.h"
 #include "manifest.pb.h"
 #include "metrics/metrics.pb.h"
+#include "controllers/controllers.pb.h"
 #include "movement/movement.pb.h"
 #include "npcs/npcs.pb.h"
 #include "objects/objects.pb.h"
@@ -75,6 +76,8 @@ MODLOCK_API extern const ::google::protobuf::internal::DescriptorTable descripto
 }  // extern "C"
 namespace modlock {
 namespace wasm {
+enum PingKind : int;
+extern const uint32_t PingKind_internal_data_[];
 enum ServiceFailure : int;
 extern const uint32_t ServiceFailure_internal_data_[];
 class Call;
@@ -105,6 +108,14 @@ class LogRequest;
 struct LogRequestDefaultTypeInternal;
 MODLOCK_API extern LogRequestDefaultTypeInternal _LogRequest_default_instance_;
 MODLOCK_API extern const ::google::protobuf::internal::ClassDataFull LogRequest_class_data_;
+class PingEvent;
+struct PingEventDefaultTypeInternal;
+MODLOCK_API extern PingEventDefaultTypeInternal _PingEvent_default_instance_;
+MODLOCK_API extern const ::google::protobuf::internal::ClassDataFull PingEvent_class_data_;
+class PingResult;
+struct PingResultDefaultTypeInternal;
+MODLOCK_API extern PingResultDefaultTypeInternal _PingResult_default_instance_;
+MODLOCK_API extern const ::google::protobuf::internal::ClassDataFull PingResult_class_data_;
 class PrecacheOptions;
 struct PrecacheOptionsDefaultTypeInternal;
 MODLOCK_API extern PrecacheOptionsDefaultTypeInternal _PrecacheOptions_default_instance_;
@@ -154,6 +165,9 @@ MODLOCK_API extern const ::google::protobuf::internal::ClassDataFull WorldEvent_
 namespace google {
 namespace protobuf {
 template <>
+internal::EnumTraitsT<::modlock::wasm::PingKind_internal_data_>
+    internal::EnumTraitsImpl::value<::modlock::wasm::PingKind>;
+template <>
 internal::EnumTraitsT<::modlock::wasm::ServiceFailure_internal_data_>
     internal::EnumTraitsImpl::value<::modlock::wasm::ServiceFailure>;
 }  // namespace protobuf
@@ -161,6 +175,44 @@ internal::EnumTraitsT<::modlock::wasm::ServiceFailure_internal_data_>
 
 namespace modlock {
 namespace wasm {
+enum PingKind : int {
+  PING_KIND_MAP = 0,
+  PING_KIND_WHEEL = 1,
+  PING_KIND_QUICK_RESPONSE = 2,
+  PING_KIND_ABILITY = 3,
+  PingKind_INT_MIN_SENTINEL_DO_NOT_USE_ =
+      ::std::numeric_limits<::int32_t>::min(),
+  PingKind_INT_MAX_SENTINEL_DO_NOT_USE_ =
+      ::std::numeric_limits<::int32_t>::max(),
+};
+
+extern const uint32_t PingKind_internal_data_[];
+inline constexpr PingKind PingKind_MIN =
+    static_cast<PingKind>(0);
+inline constexpr PingKind PingKind_MAX =
+    static_cast<PingKind>(3);
+inline bool PingKind_IsValid(int value) {
+  return 0 <= value && value <= 3;
+}
+inline constexpr int PingKind_ARRAYSIZE = 3 + 1;
+const ::google::protobuf::EnumDescriptor* PROTOBUF_NONNULL PingKind_descriptor();
+template <typename T>
+const ::std::string& PingKind_Name(T value) {
+  static_assert(::std::is_same<T, PingKind>::value ||
+                    ::std::is_integral<T>::value,
+                "Incorrect type passed to PingKind_Name().");
+  return PingKind_Name(static_cast<PingKind>(value));
+}
+template <>
+inline const ::std::string& PingKind_Name(PingKind value) {
+  return ::google::protobuf::internal::NameOfDenseEnum<PingKind_descriptor, 0, 3>(
+      static_cast<int>(value));
+}
+inline bool PingKind_Parse(
+    ::absl::string_view name, PingKind* PROTOBUF_NONNULL value) {
+  return ::google::protobuf::internal::ParseNamedEnum<PingKind>(PingKind_descriptor(), name,
+                                           value);
+}
 enum ServiceFailure : int {
   SERVICE_FAILURE_NONE = 0,
   SERVICE_FAILURE_REFUSED = 1,
@@ -260,7 +312,7 @@ class MODLOCK_API WorldEvent final : public ::google::protobuf::Message
     return *reinterpret_cast<const WorldEvent*>(
         &_WorldEvent_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 9;
+  static constexpr int kIndexInFileMessages = 11;
   friend void swap(WorldEvent& a, WorldEvent& b) { a.Swap(&b); }
   inline void Swap(WorldEvent* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -455,7 +507,7 @@ class MODLOCK_API StartServiceCallRequest final : public ::google::protobuf::Mes
     return *reinterpret_cast<const StartServiceCallRequest*>(
         &_StartServiceCallRequest_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 12;
+  static constexpr int kIndexInFileMessages = 14;
   friend void swap(StartServiceCallRequest& a, StartServiceCallRequest& b) { a.Swap(&b); }
   inline void Swap(StartServiceCallRequest* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -795,6 +847,7 @@ class MODLOCK_API StartResult final : public ::google::protobuf::Message
     kLevelsFieldNumber = 10,
     kMeleesFieldNumber = 11,
     kParriesFieldNumber = 12,
+    kPingsFieldNumber = 13,
   };
   // repeated string modifier_events = 7;
   int modifier_events_size() const;
@@ -928,11 +981,21 @@ class MODLOCK_API StartResult final : public ::google::protobuf::Message
   void _internal_set_parries(bool value);
 
   public:
+  // bool pings = 13;
+  void clear_pings() ;
+  bool pings() const;
+  void set_pings(bool value);
+
+  private:
+  bool _internal_pings() const;
+  void _internal_set_pings(bool value);
+
+  public:
   // @@protoc_insertion_point(class_scope:modlock.wasm.StartResult)
  private:
   class _Internal;
   friend class ::google::protobuf::internal::TcParser;
-  static const ::google::protobuf::internal::TcParseTable<4, 12,
+  static const ::google::protobuf::internal::TcParseTable<4, 13,
                                    0, 56,
                                    2>
       _table_;
@@ -966,6 +1029,7 @@ class MODLOCK_API StartResult final : public ::google::protobuf::Message
     bool levels_;
     bool melees_;
     bool parries_;
+    bool pings_;
     PROTOBUF_TSAN_DECLARE_MEMBER
   };
   union { Impl_ _impl_; };
@@ -1261,7 +1325,7 @@ class MODLOCK_API ServiceReply final : public ::google::protobuf::Message
     return *reinterpret_cast<const ServiceReply*>(
         &_ServiceReply_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 11;
+  static constexpr int kIndexInFileMessages = 13;
   friend void swap(ServiceReply& a, ServiceReply& b) { a.Swap(&b); }
   inline void Swap(ServiceReply* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -1456,7 +1520,7 @@ class MODLOCK_API ServiceRepliedEvent final : public ::google::protobuf::Message
     return *reinterpret_cast<const ServiceRepliedEvent*>(
         &_ServiceRepliedEvent_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 14;
+  static constexpr int kIndexInFileMessages = 16;
   friend void swap(ServiceRepliedEvent& a, ServiceRepliedEvent& b) { a.Swap(&b); }
   inline void Swap(ServiceRepliedEvent* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -1692,7 +1756,7 @@ class MODLOCK_API ServiceCallStarted final : public ::google::protobuf::Message
     return *reinterpret_cast<const ServiceCallStarted*>(
         &_ServiceCallStarted_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 13;
+  static constexpr int kIndexInFileMessages = 15;
   friend void swap(ServiceCallStarted& a, ServiceCallStarted& b) { a.Swap(&b); }
   inline void Swap(ServiceCallStarted* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -1882,7 +1946,7 @@ class MODLOCK_API ServiceCall final : public ::google::protobuf::Message
     return *reinterpret_cast<const ServiceCall*>(
         &_ServiceCall_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 10;
+  static constexpr int kIndexInFileMessages = 12;
   friend void swap(ServiceCall& a, ServiceCall& b) { a.Swap(&b); }
   inline void Swap(ServiceCall* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -2111,7 +2175,7 @@ class MODLOCK_API ServerCommandRequest final : public ::google::protobuf::Messag
     return *reinterpret_cast<const ServerCommandRequest*>(
         &_ServerCommandRequest_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 16;
+  static constexpr int kIndexInFileMessages = 18;
   friend void swap(ServerCommandRequest& a, ServerCommandRequest& b) { a.Swap(&b); }
   inline void Swap(ServerCommandRequest* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -2518,7 +2582,7 @@ class MODLOCK_API PrecacheOptions final : public ::google::protobuf::Message
     return *reinterpret_cast<const PrecacheOptions*>(
         &_PrecacheOptions_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 17;
+  static constexpr int kIndexInFileMessages = 19;
   friend void swap(PrecacheOptions& a, PrecacheOptions& b) { a.Swap(&b); }
   inline void Swap(PrecacheOptions* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -2689,6 +2753,443 @@ class MODLOCK_API PrecacheOptions final : public ::google::protobuf::Message
 MODLOCK_API extern const ::google::protobuf::internal::ClassDataFull PrecacheOptions_class_data_;
 // -------------------------------------------------------------------
 
+class MODLOCK_API PingResult final : public ::google::protobuf::Message
+/* @@protoc_insertion_point(class_definition:modlock.wasm.PingResult) */ {
+ public:
+  inline PingResult() : PingResult(nullptr) {}
+  ~PingResult() PROTOBUF_FINAL;
+
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+  void operator delete(PingResult* PROTOBUF_NONNULL msg, ::std::destroying_delete_t) {
+    SharedDtor(*msg);
+    ::google::protobuf::internal::SizedDelete(msg, sizeof(PingResult));
+  }
+#endif
+
+  template <typename = void>
+  explicit PROTOBUF_CONSTEXPR PingResult(::google::protobuf::internal::ConstantInitialized);
+
+  inline PingResult(const PingResult& from) : PingResult(nullptr, from) {}
+  inline PingResult(PingResult&& from) noexcept
+      : PingResult(nullptr, ::std::move(from)) {}
+  inline PingResult& operator=(const PingResult& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline PingResult& operator=(PingResult&& from) noexcept {
+    if (this == &from) return *this;
+    if (::google::protobuf::internal::CanMoveWithInternalSwap(GetArena(), from.GetArena())) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  inline const ::google::protobuf::UnknownFieldSet& unknown_fields() const
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.unknown_fields<::google::protobuf::UnknownFieldSet>(::google::protobuf::UnknownFieldSet::default_instance);
+  }
+  inline ::google::protobuf::UnknownFieldSet* PROTOBUF_NONNULL mutable_unknown_fields()
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.mutable_unknown_fields<::google::protobuf::UnknownFieldSet>();
+  }
+
+  static const ::google::protobuf::Descriptor* PROTOBUF_NONNULL descriptor() {
+    return GetDescriptor();
+  }
+  static const ::google::protobuf::Descriptor* PROTOBUF_NONNULL GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::google::protobuf::Reflection* PROTOBUF_NONNULL GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const PingResult& default_instance() {
+    return *reinterpret_cast<const PingResult*>(
+        &_PingResult_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages = 9;
+  friend void swap(PingResult& a, PingResult& b) { a.Swap(&b); }
+  inline void Swap(PingResult* PROTOBUF_NONNULL other) {
+    if (other == this) return;
+    if (::google::protobuf::internal::CanUseInternalSwap(GetArena(), other->GetArena())) {
+      InternalSwap(other);
+    } else {
+      ::google::protobuf::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(PingResult* PROTOBUF_NONNULL other) {
+    if (other == this) return;
+    ABSL_DCHECK(GetArena() == other->GetArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  PingResult* PROTOBUF_NONNULL New(::google::protobuf::Arena* PROTOBUF_NULLABLE arena = nullptr) const {
+    return ::google::protobuf::Message::DefaultConstruct<PingResult>(arena);
+  }
+  using ::google::protobuf::Message::CopyFrom;
+  void CopyFrom(const PingResult& from);
+  using ::google::protobuf::Message::MergeFrom;
+  void MergeFrom(const PingResult& from) { PingResult::MergeImpl(*this, from); }
+
+  private:
+  static void MergeImpl(::google::protobuf::MessageLite& to_msg,
+                        const ::google::protobuf::MessageLite& from_msg);
+
+  public:
+  bool IsInitialized() const {
+    return true;
+  }
+  ABSL_ATTRIBUTE_REINITIALIZES void Clear() PROTOBUF_FINAL;
+  #if defined(PROTOBUF_CUSTOM_VTABLE)
+  private:
+  static ::size_t ByteSizeLong(const ::google::protobuf::MessageLite& msg);
+  static ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      const ::google::protobuf::MessageLite& msg, ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream);
+
+  public:
+  ::size_t ByteSizeLong() const { return ByteSizeLong(*this); }
+  ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) const {
+    return _InternalSerialize(*this, target, stream);
+  }
+  #else   // PROTOBUF_CUSTOM_VTABLE
+  ::size_t ByteSizeLong() const final;
+  ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) const final;
+  #endif  // PROTOBUF_CUSTOM_VTABLE
+  int GetCachedSize() const { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  static void SharedDtor(MessageLite& self);
+  void InternalSwap(PingResult* PROTOBUF_NONNULL other);
+ private:
+  template <typename T>
+  friend ::absl::string_view(::google::protobuf::internal::GetAnyMessageName)();
+  static ::absl::string_view FullMessageName() { return "modlock.wasm.PingResult"; }
+
+  explicit PingResult(::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  PingResult(::google::protobuf::Arena* PROTOBUF_NULLABLE arena, const PingResult& from);
+  PingResult(
+      ::google::protobuf::Arena* PROTOBUF_NULLABLE arena, PingResult&& from) noexcept
+      : PingResult(arena) {
+    *this = ::std::move(from);
+  }
+  const ::google::protobuf::internal::ClassData* PROTOBUF_NONNULL GetClassData() const PROTOBUF_FINAL;
+  static void* PROTOBUF_NONNULL PlacementNew_(
+      const void* PROTOBUF_NONNULL, void* PROTOBUF_NONNULL mem,
+      ::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  static constexpr auto InternalNewImpl_();
+
+ public:
+  static constexpr auto InternalGenerateClassData_();
+
+  ::google::protobuf::Metadata GetMetadata() const;
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+  enum : int {
+    kMuteVoiceFieldNumber = 2,
+    kBlockFieldNumber = 1,
+  };
+  // repeated int32 mute_voice = 2;
+  int mute_voice_size() const;
+  private:
+  int _internal_mute_voice_size() const;
+
+  public:
+  void clear_mute_voice() ;
+  ::int32_t mute_voice(int index) const;
+  void set_mute_voice(int index, ::int32_t value);
+  void add_mute_voice(::int32_t value);
+  const ::google::protobuf::RepeatedField<::int32_t>& mute_voice() const;
+  ::google::protobuf::RepeatedField<::int32_t>* PROTOBUF_NONNULL mutable_mute_voice();
+
+  private:
+  const ::google::protobuf::RepeatedField<::int32_t>& _internal_mute_voice() const;
+  ::google::protobuf::RepeatedField<::int32_t>* PROTOBUF_NONNULL _internal_mutable_mute_voice();
+
+  public:
+  // bool block = 1;
+  void clear_block() ;
+  bool block() const;
+  void set_block(bool value);
+
+  private:
+  bool _internal_block() const;
+  void _internal_set_block(bool value);
+
+  public:
+  // @@protoc_insertion_point(class_scope:modlock.wasm.PingResult)
+ private:
+  class _Internal;
+  friend class ::google::protobuf::internal::TcParser;
+  static const ::google::protobuf::internal::TcParseTable<1, 2,
+                                   0, 0,
+                                   2>
+      _table_;
+
+  friend class ::google::protobuf::MessageLite;
+  friend class ::google::protobuf::Arena;
+  template <typename T>
+  friend class ::google::protobuf::Arena::InternalHelper;
+  using InternalArenaConstructable_ = void;
+  using DestructorSkippable_ = void;
+  struct Impl_ {
+    inline explicit constexpr Impl_(::google::protobuf::internal::ConstantInitialized) noexcept;
+    inline explicit Impl_(
+        ::google::protobuf::internal::InternalVisibility visibility,
+        ::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+    inline explicit Impl_(
+        ::google::protobuf::internal::InternalVisibility visibility,
+        ::google::protobuf::Arena* PROTOBUF_NULLABLE arena, const Impl_& from,
+        const PingResult& from_msg);
+    ::google::protobuf::internal::HasBits<1> _has_bits_;
+    ::google::protobuf::internal::CachedSize _cached_size_;
+    ::google::protobuf::RepeatedField<::int32_t> mute_voice_;
+    ::google::protobuf::internal::CachedSize _mute_voice_cached_byte_size_;
+    bool block_;
+    PROTOBUF_TSAN_DECLARE_MEMBER
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_github_2ecom_2fparalin_2fmodlock_2fsrc_2fwasm_2fwasm_2eproto;
+};
+
+MODLOCK_API extern const ::google::protobuf::internal::ClassDataFull PingResult_class_data_;
+// -------------------------------------------------------------------
+
+class MODLOCK_API PingEvent final : public ::google::protobuf::Message
+/* @@protoc_insertion_point(class_definition:modlock.wasm.PingEvent) */ {
+ public:
+  inline PingEvent() : PingEvent(nullptr) {}
+  ~PingEvent() PROTOBUF_FINAL;
+
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+  void operator delete(PingEvent* PROTOBUF_NONNULL msg, ::std::destroying_delete_t) {
+    SharedDtor(*msg);
+    ::google::protobuf::internal::SizedDelete(msg, sizeof(PingEvent));
+  }
+#endif
+
+  template <typename = void>
+  explicit PROTOBUF_CONSTEXPR PingEvent(::google::protobuf::internal::ConstantInitialized);
+
+  inline PingEvent(const PingEvent& from) : PingEvent(nullptr, from) {}
+  inline PingEvent(PingEvent&& from) noexcept
+      : PingEvent(nullptr, ::std::move(from)) {}
+  inline PingEvent& operator=(const PingEvent& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline PingEvent& operator=(PingEvent&& from) noexcept {
+    if (this == &from) return *this;
+    if (::google::protobuf::internal::CanMoveWithInternalSwap(GetArena(), from.GetArena())) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  inline const ::google::protobuf::UnknownFieldSet& unknown_fields() const
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.unknown_fields<::google::protobuf::UnknownFieldSet>(::google::protobuf::UnknownFieldSet::default_instance);
+  }
+  inline ::google::protobuf::UnknownFieldSet* PROTOBUF_NONNULL mutable_unknown_fields()
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.mutable_unknown_fields<::google::protobuf::UnknownFieldSet>();
+  }
+
+  static const ::google::protobuf::Descriptor* PROTOBUF_NONNULL descriptor() {
+    return GetDescriptor();
+  }
+  static const ::google::protobuf::Descriptor* PROTOBUF_NONNULL GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::google::protobuf::Reflection* PROTOBUF_NONNULL GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const PingEvent& default_instance() {
+    return *reinterpret_cast<const PingEvent*>(
+        &_PingEvent_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages = 8;
+  friend void swap(PingEvent& a, PingEvent& b) { a.Swap(&b); }
+  inline void Swap(PingEvent* PROTOBUF_NONNULL other) {
+    if (other == this) return;
+    if (::google::protobuf::internal::CanUseInternalSwap(GetArena(), other->GetArena())) {
+      InternalSwap(other);
+    } else {
+      ::google::protobuf::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(PingEvent* PROTOBUF_NONNULL other) {
+    if (other == this) return;
+    ABSL_DCHECK(GetArena() == other->GetArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  PingEvent* PROTOBUF_NONNULL New(::google::protobuf::Arena* PROTOBUF_NULLABLE arena = nullptr) const {
+    return ::google::protobuf::Message::DefaultConstruct<PingEvent>(arena);
+  }
+  using ::google::protobuf::Message::CopyFrom;
+  void CopyFrom(const PingEvent& from);
+  using ::google::protobuf::Message::MergeFrom;
+  void MergeFrom(const PingEvent& from) { PingEvent::MergeImpl(*this, from); }
+
+  private:
+  static void MergeImpl(::google::protobuf::MessageLite& to_msg,
+                        const ::google::protobuf::MessageLite& from_msg);
+
+  public:
+  bool IsInitialized() const {
+    return true;
+  }
+  ABSL_ATTRIBUTE_REINITIALIZES void Clear() PROTOBUF_FINAL;
+  #if defined(PROTOBUF_CUSTOM_VTABLE)
+  private:
+  static ::size_t ByteSizeLong(const ::google::protobuf::MessageLite& msg);
+  static ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      const ::google::protobuf::MessageLite& msg, ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream);
+
+  public:
+  ::size_t ByteSizeLong() const { return ByteSizeLong(*this); }
+  ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) const {
+    return _InternalSerialize(*this, target, stream);
+  }
+  #else   // PROTOBUF_CUSTOM_VTABLE
+  ::size_t ByteSizeLong() const final;
+  ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) const final;
+  #endif  // PROTOBUF_CUSTOM_VTABLE
+  int GetCachedSize() const { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  static void SharedDtor(MessageLite& self);
+  void InternalSwap(PingEvent* PROTOBUF_NONNULL other);
+ private:
+  template <typename T>
+  friend ::absl::string_view(::google::protobuf::internal::GetAnyMessageName)();
+  static ::absl::string_view FullMessageName() { return "modlock.wasm.PingEvent"; }
+
+  explicit PingEvent(::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  PingEvent(::google::protobuf::Arena* PROTOBUF_NULLABLE arena, const PingEvent& from);
+  PingEvent(
+      ::google::protobuf::Arena* PROTOBUF_NULLABLE arena, PingEvent&& from) noexcept
+      : PingEvent(arena) {
+    *this = ::std::move(from);
+  }
+  const ::google::protobuf::internal::ClassData* PROTOBUF_NONNULL GetClassData() const PROTOBUF_FINAL;
+  static void* PROTOBUF_NONNULL PlacementNew_(
+      const void* PROTOBUF_NONNULL, void* PROTOBUF_NONNULL mem,
+      ::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  static constexpr auto InternalNewImpl_();
+
+ public:
+  static constexpr auto InternalGenerateClassData_();
+
+  ::google::protobuf::Metadata GetMetadata() const;
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+  enum : int {
+    kPlayerFieldNumber = 1,
+    kKindFieldNumber = 2,
+    kOptionFieldNumber = 3,
+    kConceptFieldNumber = 4,
+  };
+  // int32 player = 1;
+  void clear_player() ;
+  ::int32_t player() const;
+  void set_player(::int32_t value);
+
+  private:
+  ::int32_t _internal_player() const;
+  void _internal_set_player(::int32_t value);
+
+  public:
+  // .modlock.wasm.PingKind kind = 2;
+  void clear_kind() ;
+  ::modlock::wasm::PingKind kind() const;
+  void set_kind(::modlock::wasm::PingKind value);
+
+  private:
+  ::modlock::wasm::PingKind _internal_kind() const;
+  void _internal_set_kind(::modlock::wasm::PingKind value);
+
+  public:
+  // uint32 option = 3;
+  void clear_option() ;
+  ::uint32_t option() const;
+  void set_option(::uint32_t value);
+
+  private:
+  ::uint32_t _internal_option() const;
+  void _internal_set_option(::uint32_t value);
+
+  public:
+  // int32 concept = 4;
+  void clear_concept_() ;
+  ::int32_t concept_() const;
+  void set_concept_(::int32_t value);
+
+  private:
+  ::int32_t _internal_concept_() const;
+  void _internal_set_concept_(::int32_t value);
+
+  public:
+  // @@protoc_insertion_point(class_scope:modlock.wasm.PingEvent)
+ private:
+  class _Internal;
+  friend class ::google::protobuf::internal::TcParser;
+  static const ::google::protobuf::internal::TcParseTable<2, 4,
+                                   0, 0,
+                                   2>
+      _table_;
+
+  friend class ::google::protobuf::MessageLite;
+  friend class ::google::protobuf::Arena;
+  template <typename T>
+  friend class ::google::protobuf::Arena::InternalHelper;
+  using InternalArenaConstructable_ = void;
+  using DestructorSkippable_ = void;
+  struct Impl_ {
+    inline explicit constexpr Impl_(::google::protobuf::internal::ConstantInitialized) noexcept;
+    inline explicit Impl_(
+        ::google::protobuf::internal::InternalVisibility visibility,
+        ::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+    inline explicit Impl_(
+        ::google::protobuf::internal::InternalVisibility visibility,
+        ::google::protobuf::Arena* PROTOBUF_NULLABLE arena, const Impl_& from,
+        const PingEvent& from_msg);
+    ::google::protobuf::internal::HasBits<1> _has_bits_;
+    ::google::protobuf::internal::CachedSize _cached_size_;
+    ::int32_t player_;
+    int kind_;
+    ::uint32_t option_;
+    ::int32_t concept__;
+    PROTOBUF_TSAN_DECLARE_MEMBER
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_github_2ecom_2fparalin_2fmodlock_2fsrc_2fwasm_2fwasm_2eproto;
+};
+
+MODLOCK_API extern const ::google::protobuf::internal::ClassDataFull PingEvent_class_data_;
+// -------------------------------------------------------------------
+
 class MODLOCK_API LogRequest final : public ::google::protobuf::Message
 /* @@protoc_insertion_point(class_definition:modlock.wasm.LogRequest) */ {
  public:
@@ -2744,7 +3245,7 @@ class MODLOCK_API LogRequest final : public ::google::protobuf::Message
     return *reinterpret_cast<const LogRequest*>(
         &_LogRequest_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 15;
+  static constexpr int kIndexInFileMessages = 17;
   friend void swap(LogRequest& a, LogRequest& b) { a.Swap(&b); }
   inline void Swap(LogRequest* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -3073,7 +3574,7 @@ class MODLOCK_API CommandResult final : public ::google::protobuf::Message
     return *reinterpret_cast<const CommandResult*>(
         &_CommandResult_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 8;
+  static constexpr int kIndexInFileMessages = 10;
   friend void swap(CommandResult& a, CommandResult& b) { a.Swap(&b); }
   inline void Swap(CommandResult* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -4002,6 +4503,7 @@ class MODLOCK_API FrameEvent final : public ::google::protobuf::Message
   enum : int {
     kMovementFieldNumber = 3,
     kInteractionsFieldNumber = 4,
+    kControllersFieldNumber = 5,
     kTickFieldNumber = 1,
     kTimeSecondsFieldNumber = 2,
   };
@@ -4041,6 +4543,23 @@ class MODLOCK_API FrameEvent final : public ::google::protobuf::Message
   ::google::protobuf::RepeatedField<int>* PROTOBUF_NONNULL _internal_mutable_interactions();
 
   public:
+  // repeated .modlock.wasm.controllers.PlayerControllers controllers = 5;
+  int controllers_size() const;
+  private:
+  int _internal_controllers_size() const;
+
+  public:
+  void clear_controllers() ;
+  ::modlock::wasm::controllers::PlayerControllers* PROTOBUF_NONNULL mutable_controllers(int index);
+  ::google::protobuf::RepeatedPtrField<::modlock::wasm::controllers::PlayerControllers>* PROTOBUF_NONNULL mutable_controllers();
+
+  private:
+  const ::google::protobuf::RepeatedPtrField<::modlock::wasm::controllers::PlayerControllers>& _internal_controllers() const;
+  ::google::protobuf::RepeatedPtrField<::modlock::wasm::controllers::PlayerControllers>* PROTOBUF_NONNULL _internal_mutable_controllers();
+  public:
+  const ::modlock::wasm::controllers::PlayerControllers& controllers(int index) const;
+  ::modlock::wasm::controllers::PlayerControllers* PROTOBUF_NONNULL add_controllers();
+  const ::google::protobuf::RepeatedPtrField<::modlock::wasm::controllers::PlayerControllers>& controllers() const;
   // uint64 tick = 1;
   void clear_tick() ;
   ::uint64_t tick() const;
@@ -4065,8 +4584,8 @@ class MODLOCK_API FrameEvent final : public ::google::protobuf::Message
  private:
   class _Internal;
   friend class ::google::protobuf::internal::TcParser;
-  static const ::google::protobuf::internal::TcParseTable<2, 4,
-                                   1, 0,
+  static const ::google::protobuf::internal::TcParseTable<3, 5,
+                                   2, 0,
                                    2>
       _table_;
 
@@ -4090,6 +4609,7 @@ class MODLOCK_API FrameEvent final : public ::google::protobuf::Message
     ::google::protobuf::RepeatedPtrField< ::modlock::wasm::movement::MovementSample > movement_;
     ::google::protobuf::RepeatedField<int> interactions_;
     ::google::protobuf::internal::CachedSize _interactions_cached_byte_size_;
+    ::google::protobuf::RepeatedPtrField< ::modlock::wasm::controllers::PlayerControllers > controllers_;
     ::uint64_t tick_;
     double time_seconds_;
     PROTOBUF_TSAN_DECLARE_MEMBER
@@ -4901,6 +5421,31 @@ inline void StartResult::_internal_set_parries(bool value) {
   _impl_.parries_ = value;
 }
 
+// bool pings = 13;
+inline void StartResult::clear_pings() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.pings_ = false;
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00001000U);
+}
+inline bool StartResult::pings() const {
+  // @@protoc_insertion_point(field_get:modlock.wasm.StartResult.pings)
+  return _internal_pings();
+}
+inline void StartResult::set_pings(bool value) {
+  _internal_set_pings(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00001000U);
+  // @@protoc_insertion_point(field_set:modlock.wasm.StartResult.pings)
+}
+inline bool StartResult::_internal_pings() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.pings_;
+}
+inline void StartResult::_internal_set_pings(bool value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.pings_ = value;
+}
+
 // -------------------------------------------------------------------
 
 // FrameEvent
@@ -4910,7 +5455,7 @@ inline void FrameEvent::clear_tick() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   _impl_.tick_ = ::uint64_t{0u};
   ClearHasBit(_impl_._has_bits_[0],
-                  0x00000004U);
+                  0x00000008U);
 }
 inline ::uint64_t FrameEvent::tick() const {
   // @@protoc_insertion_point(field_get:modlock.wasm.FrameEvent.tick)
@@ -4918,7 +5463,7 @@ inline ::uint64_t FrameEvent::tick() const {
 }
 inline void FrameEvent::set_tick(::uint64_t value) {
   _internal_set_tick(value);
-  SetHasBit(_impl_._has_bits_[0], 0x00000004U);
+  SetHasBit(_impl_._has_bits_[0], 0x00000008U);
   // @@protoc_insertion_point(field_set:modlock.wasm.FrameEvent.tick)
 }
 inline ::uint64_t FrameEvent::_internal_tick() const {
@@ -4935,7 +5480,7 @@ inline void FrameEvent::clear_time_seconds() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   _impl_.time_seconds_ = 0;
   ClearHasBit(_impl_._has_bits_[0],
-                  0x00000008U);
+                  0x00000010U);
 }
 inline double FrameEvent::time_seconds() const {
   // @@protoc_insertion_point(field_get:modlock.wasm.FrameEvent.time_seconds)
@@ -4943,7 +5488,7 @@ inline double FrameEvent::time_seconds() const {
 }
 inline void FrameEvent::set_time_seconds(double value) {
   _internal_set_time_seconds(value);
-  SetHasBit(_impl_._has_bits_[0], 0x00000008U);
+  SetHasBit(_impl_._has_bits_[0], 0x00000010U);
   // @@protoc_insertion_point(field_set:modlock.wasm.FrameEvent.time_seconds)
 }
 inline double FrameEvent::_internal_time_seconds() const {
@@ -5053,6 +5598,56 @@ inline ::google::protobuf::RepeatedField<int>* PROTOBUF_NONNULL
 FrameEvent::_internal_mutable_interactions() {
   ::google::protobuf::internal::TSanRead(&_impl_);
   return &_impl_.interactions_;
+}
+
+// repeated .modlock.wasm.controllers.PlayerControllers controllers = 5;
+inline int FrameEvent::_internal_controllers_size() const {
+  return _internal_controllers().size();
+}
+inline int FrameEvent::controllers_size() const {
+  return _internal_controllers_size();
+}
+inline ::modlock::wasm::controllers::PlayerControllers* PROTOBUF_NONNULL FrameEvent::mutable_controllers(int index)
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_mutable:modlock.wasm.FrameEvent.controllers)
+  return _internal_mutable_controllers()->Mutable(index);
+}
+inline ::google::protobuf::RepeatedPtrField<::modlock::wasm::controllers::PlayerControllers>* PROTOBUF_NONNULL FrameEvent::mutable_controllers()
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  SetHasBitForRepeated(_impl_._has_bits_[0], 0x00000004U);
+  // @@protoc_insertion_point(field_mutable_list:modlock.wasm.FrameEvent.controllers)
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _internal_mutable_controllers();
+}
+inline const ::modlock::wasm::controllers::PlayerControllers& FrameEvent::controllers(int index) const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:modlock.wasm.FrameEvent.controllers)
+  return _internal_controllers().Get(index);
+}
+inline ::modlock::wasm::controllers::PlayerControllers* PROTOBUF_NONNULL FrameEvent::add_controllers()
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  ::modlock::wasm::controllers::PlayerControllers* _add =
+      _internal_mutable_controllers()->InternalAddWithArena(
+          ::google::protobuf::MessageLite::internal_visibility(), GetArena());
+  SetHasBitForRepeated(_impl_._has_bits_[0], 0x00000004U);
+  // @@protoc_insertion_point(field_add:modlock.wasm.FrameEvent.controllers)
+  return _add;
+}
+inline const ::google::protobuf::RepeatedPtrField<::modlock::wasm::controllers::PlayerControllers>& FrameEvent::controllers() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_list:modlock.wasm.FrameEvent.controllers)
+  return _internal_controllers();
+}
+inline const ::google::protobuf::RepeatedPtrField<::modlock::wasm::controllers::PlayerControllers>&
+FrameEvent::_internal_controllers() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.controllers_;
+}
+inline ::google::protobuf::RepeatedPtrField<::modlock::wasm::controllers::PlayerControllers>* PROTOBUF_NONNULL
+FrameEvent::_internal_mutable_controllers() {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return &_impl_.controllers_;
 }
 
 // -------------------------------------------------------------------
@@ -5291,6 +5886,189 @@ inline ::int32_t ChatEvent::_internal_lane() const {
 inline void ChatEvent::_internal_set_lane(::int32_t value) {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   _impl_.lane_ = value;
+}
+
+// -------------------------------------------------------------------
+
+// PingEvent
+
+// int32 player = 1;
+inline void PingEvent::clear_player() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.player_ = 0;
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000001U);
+}
+inline ::int32_t PingEvent::player() const {
+  // @@protoc_insertion_point(field_get:modlock.wasm.PingEvent.player)
+  return _internal_player();
+}
+inline void PingEvent::set_player(::int32_t value) {
+  _internal_set_player(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000001U);
+  // @@protoc_insertion_point(field_set:modlock.wasm.PingEvent.player)
+}
+inline ::int32_t PingEvent::_internal_player() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.player_;
+}
+inline void PingEvent::_internal_set_player(::int32_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.player_ = value;
+}
+
+// .modlock.wasm.PingKind kind = 2;
+inline void PingEvent::clear_kind() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.kind_ = 0;
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000002U);
+}
+inline ::modlock::wasm::PingKind PingEvent::kind() const {
+  // @@protoc_insertion_point(field_get:modlock.wasm.PingEvent.kind)
+  return _internal_kind();
+}
+inline void PingEvent::set_kind(::modlock::wasm::PingKind value) {
+  _internal_set_kind(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000002U);
+  // @@protoc_insertion_point(field_set:modlock.wasm.PingEvent.kind)
+}
+inline ::modlock::wasm::PingKind PingEvent::_internal_kind() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return static_cast<::modlock::wasm::PingKind>(_impl_.kind_);
+}
+inline void PingEvent::_internal_set_kind(::modlock::wasm::PingKind value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.kind_ = value;
+}
+
+// uint32 option = 3;
+inline void PingEvent::clear_option() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.option_ = 0u;
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000004U);
+}
+inline ::uint32_t PingEvent::option() const {
+  // @@protoc_insertion_point(field_get:modlock.wasm.PingEvent.option)
+  return _internal_option();
+}
+inline void PingEvent::set_option(::uint32_t value) {
+  _internal_set_option(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000004U);
+  // @@protoc_insertion_point(field_set:modlock.wasm.PingEvent.option)
+}
+inline ::uint32_t PingEvent::_internal_option() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.option_;
+}
+inline void PingEvent::_internal_set_option(::uint32_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.option_ = value;
+}
+
+// int32 concept = 4;
+inline void PingEvent::clear_concept_() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.concept__ = 0;
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000008U);
+}
+inline ::int32_t PingEvent::concept_() const {
+  // @@protoc_insertion_point(field_get:modlock.wasm.PingEvent.concept)
+  return _internal_concept_();
+}
+inline void PingEvent::set_concept_(::int32_t value) {
+  _internal_set_concept_(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000008U);
+  // @@protoc_insertion_point(field_set:modlock.wasm.PingEvent.concept)
+}
+inline ::int32_t PingEvent::_internal_concept_() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.concept__;
+}
+inline void PingEvent::_internal_set_concept_(::int32_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.concept__ = value;
+}
+
+// -------------------------------------------------------------------
+
+// PingResult
+
+// bool block = 1;
+inline void PingResult::clear_block() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.block_ = false;
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000002U);
+}
+inline bool PingResult::block() const {
+  // @@protoc_insertion_point(field_get:modlock.wasm.PingResult.block)
+  return _internal_block();
+}
+inline void PingResult::set_block(bool value) {
+  _internal_set_block(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000002U);
+  // @@protoc_insertion_point(field_set:modlock.wasm.PingResult.block)
+}
+inline bool PingResult::_internal_block() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.block_;
+}
+inline void PingResult::_internal_set_block(bool value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.block_ = value;
+}
+
+// repeated int32 mute_voice = 2;
+inline int PingResult::_internal_mute_voice_size() const {
+  return _internal_mute_voice().size();
+}
+inline int PingResult::mute_voice_size() const {
+  return _internal_mute_voice_size();
+}
+inline void PingResult::clear_mute_voice() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.mute_voice_.Clear();
+  ClearHasBitForRepeated(_impl_._has_bits_[0],
+                  0x00000001U);
+}
+inline ::int32_t PingResult::mute_voice(int index) const {
+  // @@protoc_insertion_point(field_get:modlock.wasm.PingResult.mute_voice)
+  return _internal_mute_voice().Get(index);
+}
+inline void PingResult::set_mute_voice(int index, ::int32_t value) {
+  _internal_mutable_mute_voice()->Set(index, value);
+  // @@protoc_insertion_point(field_set:modlock.wasm.PingResult.mute_voice)
+}
+inline void PingResult::add_mute_voice(::int32_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _internal_mutable_mute_voice()->Add(value);
+  SetHasBitForRepeated(_impl_._has_bits_[0], 0x00000001U);
+  // @@protoc_insertion_point(field_add:modlock.wasm.PingResult.mute_voice)
+}
+inline const ::google::protobuf::RepeatedField<::int32_t>& PingResult::mute_voice() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_list:modlock.wasm.PingResult.mute_voice)
+  return _internal_mute_voice();
+}
+inline ::google::protobuf::RepeatedField<::int32_t>* PROTOBUF_NONNULL PingResult::mutable_mute_voice()
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  SetHasBitForRepeated(_impl_._has_bits_[0], 0x00000001U);
+  // @@protoc_insertion_point(field_mutable_list:modlock.wasm.PingResult.mute_voice)
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _internal_mutable_mute_voice();
+}
+inline const ::google::protobuf::RepeatedField<::int32_t>&
+PingResult::_internal_mute_voice() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.mute_voice_;
+}
+inline ::google::protobuf::RepeatedField<::int32_t>* PROTOBUF_NONNULL
+PingResult::_internal_mutable_mute_voice() {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return &_impl_.mute_voice_;
 }
 
 // -------------------------------------------------------------------
@@ -6394,6 +7172,12 @@ PrecacheOptions::_internal_mutable_resources() {
 namespace google {
 namespace protobuf {
 
+template <>
+struct is_proto_enum<::modlock::wasm::PingKind> : std::true_type {};
+template <>
+inline const EnumDescriptor* PROTOBUF_NONNULL GetEnumDescriptor<::modlock::wasm::PingKind>() {
+  return ::modlock::wasm::PingKind_descriptor();
+}
 template <>
 struct is_proto_enum<::modlock::wasm::ServiceFailure> : std::true_type {};
 template <>

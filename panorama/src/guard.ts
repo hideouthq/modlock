@@ -43,9 +43,12 @@ export interface GuardHost extends AbilityHost {
 }
 
 /**
- * HIDDEN_MARK names the attribute on each panel the guard hid: "shown" when
- * the panel showed before, "unseen" when it did not. The mark outlives the
- * script, so a guard that starts again shows what an earlier one hid.
+ * HIDDEN_MARK names the attribute on each panel the guard hid. On a panel a
+ * named part claims its value is "sheets"; on any other it is the inline
+ * visibility the guard's collapse replaced: "none" for no inline value,
+ * "visible" or "collapse". An earlier release wrote "shown" or "unseen" over
+ * a panel with no inline value. The mark outlives the script, so a guard
+ * that starts again gives back what an earlier one hid.
  */
 export const HIDDEN_MARK = 'modlock_hidden'
 
@@ -230,38 +233,78 @@ function ownPanel(hud: GuardPanel, id: string): GuardPanel[] {
 }
 
 /**
- * hidePanel hides one panel by its visible, marking whether it showed. A
- * panel the game shows again meanwhile is hidden again and marked shown.
- * Visible, unlike an inline visibility, comes back at once when set again.
- * A panel whose visibility a layout's native changes hold is the layout's.
+ * COLLAPSE is the inline visibility the guard hides a panel with.
+ *
+ * A panel draws by its inline style.visibility when one is set, and otherwise
+ * by its style sheets under the classes on its ancestors. Script's visible
+ * reads the drawn value and writes the inline one: false writes "collapse",
+ * true writes "visible", and either outlives every later class change and
+ * the script that wrote it, so a guard that wrote visible true kept a
+ * reminder the game shows by class drawn in every later game. The guard
+ * writes only the inline value; null hands the panel back to its sheets in
+ * the same frame.
+ *
+ * The game shows a named part's panels by class alone and writes no inline
+ * value on them, so any it carries is a script's, such as a mod's own
+ * visible write, and the guard's restore clears it. Other panels the whole
+ * HUD's walk reaches, such as the hero shop, the game hides by an inline
+ * collapse, so there the guard gives back the value it replaced. The rules
+ * are in ../StockPanel.tla.
  */
-export function hidePanel(panel: GuardPanel): void {
-  if (holdsVisibility(panel)) return
-  if (panel.visible) {
-    panel.SetAttributeString(HIDDEN_MARK, 'shown')
-    panel.visible = false
-  } else if (panel.GetAttributeString(HIDDEN_MARK, '') === '') {
-    panel.SetAttributeString(HIDDEN_MARK, 'unseen')
-  }
+const COLLAPSE = 'collapse'
+
+/** SHEETS is the mark on a panel the guard gives back to its sheets. */
+const SHEETS = 'sheets'
+
+/** recorded is the inline value a mark records the guard's collapse replaced. */
+export function recorded(mark: string): string | null {
+  return mark === 'visible' || mark === COLLAPSE ? mark : null
 }
 
 /**
- * restorePanel undoes what a guard's mark on panel records. A panel that
- * showed comes back; one that did not is left to the game, since setting
- * visible overrides its style sheets: gameplay_hud stays collapsed until a
- * player joins a team. An inline collapse from Modlock's renderer before the
- * guard goes too. A panel whose visibility a layout's native changes hold
- * only loses the mark: the layout's release gives it back.
+ * hidePanel hides one panel by an inline collapse. A panel drawn by sheets,
+ * one a named part claims, is marked to go back to them. Any other is marked
+ * with the inline value the collapse replaced, and a value another writer
+ * set since the last tick is recorded in place of the older one, since it is
+ * that writer's latest. A panel whose visibility a layout's native changes
+ * hold is the layout's.
  */
-export function restorePanel(panel: GuardPanel): void {
-  const held = holdsVisibility(panel)
+export function hidePanel(panel: GuardPanel, sheets = false): void {
+  // A layout's held visibility is the layout's.
+  if (holdsVisibility(panel)) return
+
+  // The guard's own collapse under a mark keeps its mark; any other value
+  // is recorded, unless the panel goes back to its sheets, then covered.
+  const inline = panel.style.visibility ?? null
   const mark = panel.GetAttributeString(HIDDEN_MARK, '')
-  if (mark !== '') {
-    panel.SetAttributeString(HIDDEN_MARK, '')
-    if (mark === 'shown' && !held) panel.visible = true
-  }
-  if (!held && panel.style.visibility === 'collapse')
-    panel.style.visibility = null
+  const next =
+    sheets || mark === SHEETS
+      ? SHEETS
+      : inline === COLLAPSE && mark !== ''
+        ? mark
+        : (inline ?? 'none')
+  if (mark !== next) panel.SetAttributeString(HIDDEN_MARK, next)
+  if (inline !== COLLAPSE) panel.style.visibility = COLLAPSE
+}
+
+/**
+ * restorePanel gives back a panel the guard's mark stands on. A panel drawn
+ * by sheets, marked so or named by sheets, gets no inline value, whoever
+ * wrote the one it has. Any other gets the inline value its mark records,
+ * and an inline value there other than the guard's collapse is a later
+ * writer's, so it stands. A panel whose visibility a layout's native changes
+ * hold only loses the mark: the layout's release gives it back.
+ */
+export function restorePanel(panel: GuardPanel, sheets = false): void {
+  // Unmarked panels are not the guard's; a marked one loses its mark first.
+  const mark = panel.GetAttributeString(HIDDEN_MARK, '')
+  if (mark === '') return
+  panel.SetAttributeString(HIDDEN_MARK, '')
+  if (holdsVisibility(panel)) return
+  const inline = panel.style.visibility ?? null
+  if (sheets || mark === SHEETS) {
+    if (inline !== null) panel.style.visibility = null
+  } else if (inline === COLLAPSE) panel.style.visibility = recorded(mark)
 }
 
 /**
@@ -277,8 +320,15 @@ export const ALL_MARK = 'modlock_hidden_all'
  * resident each hold one, so both find, mark and give back the same panels.
  */
 export class HudParts {
-  /** walked holds the whole HUD's panels from the last walk, and when. */
-  private walked: { panels: GuardPanel[]; at: number } | null = null
+  /**
+   * walked holds the whole HUD's panels from the last walk, those a named
+   * part claims among them, and when.
+   */
+  private walked: {
+    panels: GuardPanel[]
+    named: Set<GuardPanel>
+    at: number
+  } | null = null
 
   /**
    * HudParts writes on hud's panels; now is the clock in seconds; HUD_PART_ALL
@@ -292,12 +342,18 @@ export class HudParts {
 
   /** hide hides part's panels, the ones the game built since included. */
   hide(part: HudPart): void {
-    if (
-      part === HudPart.ALL &&
-      this.hud.GetAttributeString(ALL_MARK, '') === ''
-    )
+    // A named part's panels go back to their sheets.
+    if (part !== HudPart.ALL) {
+      for (const panel of finders[part]?.(this.hud, this.scope(false)) ?? [])
+        hidePanel(panel, true)
+      return
+    }
+
+    // The whole HUD's go back to their sheets where a named part claims them.
+    if (this.hud.GetAttributeString(ALL_MARK, '') === '')
       this.hud.SetAttributeString(ALL_MARK, '1')
-    for (const panel of this.find(part)) hidePanel(panel)
+    const { panels, named } = this.walk()
+    for (const panel of panels) hidePanel(panel, named.has(panel))
   }
 
   /**
@@ -307,15 +363,17 @@ export class HudParts {
   restore(part: HudPart): void {
     if (part === HudPart.ALL) {
       // Walk the whole HUD only while a guard hides it, then drop the mark.
+      // A named part's panel goes back to its sheets under any mark.
       this.walked = null
       if (this.hud.GetAttributeString(ALL_MARK, '') === '') return
+      const named = this.named(true)
       for (const panel of everything(this.hud, this.scope(true)))
-        restorePanel(panel)
+        restorePanel(panel, named.has(panel))
       this.hud.SetAttributeString(ALL_MARK, '')
       return
     }
     for (const panel of finders[part]?.(this.hud, this.scope(true)) ?? [])
-      restorePanel(panel)
+      restorePanel(panel, true)
   }
 
   /** restoreAll gives back every part's panels. */
@@ -329,16 +387,26 @@ export class HudParts {
   }
 
   /**
-   * find returns part's panels to hide. The whole HUD's are kept from the
-   * last walk while they are valid and newer than WALK_SECONDS; a walk that
-   * no longer finds a panel the last one did, which now holds a panel that
-   * stays, gives it back.
+   * named returns the panels the named parts find, which the game draws by
+   * their sheets.
    */
-  private find(part: HudPart): GuardPanel[] {
-    // Find every other part afresh.
-    if (part !== HudPart.ALL)
-      return finders[part]?.(this.hud, this.scope(false)) ?? []
+  private named(restoring: boolean): Set<GuardPanel> {
+    const named = new Set<GuardPanel>()
+    for (const [part, finder] of Object.entries(finders)) {
+      if (Number(part) === HudPart.ALL) continue
+      for (const panel of finder?.(this.hud, this.scope(restoring)) ?? [])
+        named.add(panel)
+    }
+    return named
+  }
 
+  /**
+   * walk returns the whole HUD's panels to hide, kept from the last walk
+   * while they are valid and newer than WALK_SECONDS; a walk that no longer
+   * finds a panel the last one did, which now holds a panel that stays,
+   * gives it back.
+   */
+  private walk(): { panels: GuardPanel[]; named: Set<GuardPanel> } {
     // Keep the last walk while it is new and whole.
     const now = this.now()
     const last = this.walked
@@ -347,17 +415,22 @@ export class HudParts {
       now - last.at < WALK_SECONDS &&
       last.panels.every((panel) => panel.IsValid())
     ) {
-      return last.panels
+      return last
     }
 
     // Walk again, giving back what the walk no longer hides.
     const panels = everything(this.hud, this.scope(false))
+    const named = this.named(false)
     const found = new Set(panels)
     for (const panel of last?.panels ?? []) {
-      if (!found.has(panel) && panel.IsValid()) restorePanel(panel)
+      if (!found.has(panel) && panel.IsValid())
+        restorePanel(
+          panel,
+          named.has(panel) || (last?.named.has(panel) ?? false),
+        )
     }
-    this.walked = { panels, at: now }
-    return panels
+    this.walked = { panels, named, at: now }
+    return this.walked
   }
 }
 

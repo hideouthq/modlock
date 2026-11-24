@@ -12,6 +12,7 @@ import (
 
 	protobuf_go_lite "github.com/aperturerobotics/protobuf-go-lite"
 	json "github.com/aperturerobotics/protobuf-go-lite/json"
+	controllers "github.com/paralin/modlock/src/wasm/controllers"
 	players "github.com/paralin/modlock/src/wasm/players"
 	profile "github.com/paralin/modlock/src/wasm/profile"
 	ui "github.com/paralin/modlock/src/wasm/ui"
@@ -68,6 +69,7 @@ type ControlRequest struct {
 	//	*ControlRequest_Service
 	//	*ControlRequest_Call
 	//	*ControlRequest_Answer
+	//	*ControlRequest_Controllers
 	Body isControlRequest_Body `protobuf_oneof:"body"`
 }
 
@@ -119,6 +121,13 @@ func (x *ControlRequest) GetAnswer() *ServiceAnswer {
 	return nil
 }
 
+func (x *ControlRequest) GetControllers() *controllers.ControllerFrames {
+	if x, ok := x.GetBody().(*ControlRequest_Controllers); ok {
+		return x.Controllers
+	}
+	return nil
+}
+
 type isControlRequest_Body interface {
 	isControlRequest_Body()
 }
@@ -149,6 +158,12 @@ type ControlRequest_Answer struct {
 	Answer *ServiceAnswer `protobuf:"bytes,5,opt,name=answer,proto3,oneof"`
 }
 
+type ControlRequest_Controllers struct {
+	// Controllers carries the frames of one player's controller stream, which
+	// the controller has bound to that player's own client.
+	Controllers *controllers.ControllerFrames `protobuf:"bytes,6,opt,name=controllers,proto3,oneof"`
+}
+
 func (*ControlRequest_Reload) isControlRequest_Body() {}
 
 func (*ControlRequest_Roles) isControlRequest_Body() {}
@@ -158,6 +173,8 @@ func (*ControlRequest_Service) isControlRequest_Body() {}
 func (*ControlRequest_Call) isControlRequest_Body() {}
 
 func (*ControlRequest_Answer) isControlRequest_Body() {}
+
+func (*ControlRequest_Controllers) isControlRequest_Body() {}
 
 // ModCall calls one method of a service a running mod serves, on the game's
 // thread between frames. Only the controller can send it; no player can.
@@ -306,6 +323,7 @@ type HostEvent struct {
 	//	*HostEvent_ServiceApplied
 	//	*HostEvent_Called
 	//	*HostEvent_ServiceCall
+	//	*HostEvent_ControllersWanted
 	Body isHostEvent_Body `protobuf_oneof:"body"`
 }
 
@@ -420,6 +438,13 @@ func (x *HostEvent) GetServiceCall() *ServiceCall {
 	return nil
 }
 
+func (x *HostEvent) GetControllersWanted() *controllers.ControllerWants {
+	if x, ok := x.GetBody().(*HostEvent_ControllersWanted); ok {
+		return x.ControllersWanted
+	}
+	return nil
+}
+
 type isHostEvent_Body interface {
 	isHostEvent_Body()
 }
@@ -500,6 +525,12 @@ type HostEvent_ServiceCall struct {
 	ServiceCall *ServiceCall `protobuf:"bytes,14,opt,name=service_call,json=serviceCall,proto3,oneof"`
 }
 
+type HostEvent_ControllersWanted struct {
+	// ControllersWanted lists every player whose controllers some mod watches,
+	// each time the list changes.
+	ControllersWanted *controllers.ControllerWants `protobuf:"bytes,15,opt,name=controllers_wanted,json=controllersWanted,proto3,oneof"`
+}
+
 func (*HostEvent_Started) isHostEvent_Body() {}
 
 func (*HostEvent_Log) isHostEvent_Body() {}
@@ -527,6 +558,8 @@ func (*HostEvent_ServiceApplied) isHostEvent_Body() {}
 func (*HostEvent_Called) isHostEvent_Body() {}
 
 func (*HostEvent_ServiceCall) isHostEvent_Body() {}
+
+func (*HostEvent_ControllersWanted) isHostEvent_Body() {}
 
 // PlayerChat is a line a player said in chat, to everyone or to their team.
 type PlayerChat struct {
@@ -725,6 +758,10 @@ type PlayerJoined struct {
 	// Connection; zero from a host that does not report it. A controller that
 	// answers calls naming a generation refuses them all when it is zero.
 	Generation uint32 `protobuf:"varint,4,opt,name=generation,proto3" json:"generation,omitempty"`
+	// Address is the ip:port the player's packets come from, such as
+	// 127.0.0.1:27006, which tells a controller which of its forwarded links
+	// carries the player; empty from a host that does not report it.
+	Address string `protobuf:"bytes,5,opt,name=address,proto3" json:"address,omitempty"`
 }
 
 func (x *PlayerJoined) Reset() {
@@ -759,6 +796,13 @@ func (x *PlayerJoined) GetGeneration() uint32 {
 		return x.Generation
 	}
 	return 0
+}
+
+func (x *PlayerJoined) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
 }
 
 // PlayerLeft identifies a player who left. Bots leave too; a controller drops
@@ -1291,6 +1335,19 @@ func (m *ControlRequest_Answer) CloneOneofVT() isControlRequest_Body {
 	return m.CloneVT()
 }
 
+func (m *ControlRequest_Controllers) CloneVT() *ControlRequest_Controllers {
+	if m == nil {
+		return (*ControlRequest_Controllers)(nil)
+	}
+	r := new(ControlRequest_Controllers)
+	r.Controllers = protobuf_go_lite.CloneVTValue(m.Controllers)
+	return r
+}
+
+func (m *ControlRequest_Controllers) CloneOneofVT() isControlRequest_Body {
+	return m.CloneVT()
+}
+
 func (m *ModCall) CloneVT() *ModCall {
 	if m == nil {
 		return (*ModCall)(nil)
@@ -1546,6 +1603,19 @@ func (m *HostEvent_ServiceCall) CloneOneofVT() isHostEvent_Body {
 	return m.CloneVT()
 }
 
+func (m *HostEvent_ControllersWanted) CloneVT() *HostEvent_ControllersWanted {
+	if m == nil {
+		return (*HostEvent_ControllersWanted)(nil)
+	}
+	r := new(HostEvent_ControllersWanted)
+	r.ControllersWanted = protobuf_go_lite.CloneVTValue(m.ControllersWanted)
+	return r
+}
+
+func (m *HostEvent_ControllersWanted) CloneOneofVT() isHostEvent_Body {
+	return m.CloneVT()
+}
+
 func (m *PlayerChat) CloneVT() *PlayerChat {
 	if m == nil {
 		return (*PlayerChat)(nil)
@@ -1658,6 +1728,7 @@ func (m *PlayerJoined) CloneVT() *PlayerJoined {
 	r.Name = m.Name
 	r.SteamId = m.SteamId
 	r.Generation = m.Generation
+	r.Address = m.Address
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -1978,6 +2049,23 @@ func (this *ControlRequest_Answer) EqualVT(thatIface isControlRequest_Body) bool
 		return false
 	}
 	if !protobuf_go_lite.EqualVTImplicit(this.Answer, that.Answer, func() *ServiceAnswer { return &ServiceAnswer{} }) {
+		return false
+	}
+	return true
+}
+
+func (this *ControlRequest_Controllers) EqualVT(thatIface isControlRequest_Body) bool {
+	that, ok := thatIface.(*ControlRequest_Controllers)
+	if !ok {
+		return false
+	}
+	if this == that {
+		return true
+	}
+	if this == nil && that != nil || this != nil && that == nil {
+		return false
+	}
+	if !protobuf_go_lite.EqualVTImplicit(this.Controllers, that.Controllers, func() *controllers.ControllerFrames { return &controllers.ControllerFrames{} }) {
 		return false
 	}
 	return true
@@ -2329,6 +2417,23 @@ func (this *HostEvent_ServiceCall) EqualVT(thatIface isHostEvent_Body) bool {
 	return true
 }
 
+func (this *HostEvent_ControllersWanted) EqualVT(thatIface isHostEvent_Body) bool {
+	that, ok := thatIface.(*HostEvent_ControllersWanted)
+	if !ok {
+		return false
+	}
+	if this == that {
+		return true
+	}
+	if this == nil && that != nil || this != nil && that == nil {
+		return false
+	}
+	if !protobuf_go_lite.EqualVTImplicit(this.ControllersWanted, that.ControllersWanted, func() *controllers.ControllerWants { return &controllers.ControllerWants{} }) {
+		return false
+	}
+	return true
+}
+
 func (this *PlayerChat) EqualVT(that *PlayerChat) bool {
 	if this == that {
 		return true
@@ -2486,6 +2591,9 @@ func (this *PlayerJoined) EqualVT(that *PlayerJoined) bool {
 		return false
 	}
 	if this.Generation != that.Generation {
+		return false
+	}
+	if this.Address != that.Address {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -2864,6 +2972,10 @@ func (x *ControlRequest) MarshalProtoJSON(s *json.MarshalState) {
 			s.WriteMoreIf(&wroteField)
 			s.WriteObjectField("answer")
 			ov.Answer.MarshalProtoJSON(s.WithField("answer"))
+		case *ControlRequest_Controllers:
+			s.WriteMoreIf(&wroteField)
+			s.WriteObjectField("controllers")
+			ov.Controllers.MarshalProtoJSON(s.WithField("controllers"))
 		}
 	}
 	s.WriteObjectEnd()
@@ -2928,6 +3040,15 @@ func (x *ControlRequest) UnmarshalProtoJSON(s *json.UnmarshalState) {
 			}
 			ov.Answer = &ServiceAnswer{}
 			ov.Answer.UnmarshalProtoJSON(s.WithField("answer", true))
+		case "controllers":
+			ov := &ControlRequest_Controllers{}
+			x.Body = ov
+			if s.ReadNil() {
+				ov.Controllers = nil
+				return
+			}
+			ov.Controllers = &controllers.ControllerFrames{}
+			ov.Controllers.UnmarshalProtoJSON(s.WithField("controllers", true))
 		}
 	})
 }
@@ -3185,6 +3306,10 @@ func (x *HostEvent) MarshalProtoJSON(s *json.MarshalState) {
 			s.WriteMoreIf(&wroteField)
 			s.WriteObjectField("serviceCall")
 			ov.ServiceCall.MarshalProtoJSON(s.WithField("serviceCall"))
+		case *HostEvent_ControllersWanted:
+			s.WriteMoreIf(&wroteField)
+			s.WriteObjectField("controllersWanted")
+			ov.ControllersWanted.MarshalProtoJSON(s.WithField("controllersWanted"))
 		}
 	}
 	s.WriteObjectEnd()
@@ -3330,6 +3455,15 @@ func (x *HostEvent) UnmarshalProtoJSON(s *json.UnmarshalState) {
 			}
 			ov.ServiceCall = &ServiceCall{}
 			ov.ServiceCall.UnmarshalProtoJSON(s.WithField("service_call", true))
+		case "controllers_wanted", "controllersWanted":
+			ov := &HostEvent_ControllersWanted{}
+			x.Body = ov
+			if s.ReadNil() {
+				ov.ControllersWanted = nil
+				return
+			}
+			ov.ControllersWanted = &controllers.ControllerWants{}
+			ov.ControllersWanted.UnmarshalProtoJSON(s.WithField("controllers_wanted", true))
 		}
 	})
 }
@@ -3683,6 +3817,11 @@ func (x *PlayerJoined) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("generation")
 		s.WriteUint32(x.Generation)
 	}
+	if x.Address != "" || s.HasField("address") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("address")
+		s.WriteString(x.Address)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -3712,6 +3851,9 @@ func (x *PlayerJoined) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "generation":
 			s.AddField("generation")
 			x.Generation = s.ReadUint32()
+		case "address":
+			s.AddField("address")
+			x.Address = s.ReadString()
 		}
 	})
 }
@@ -4590,6 +4732,30 @@ func (m *ControlRequest_Answer) MarshalToSizedBufferVT(dAtA []byte) (int, error)
 	return len(dAtA) - i, nil
 }
 
+func (m *ControlRequest_Controllers) MarshalToVT(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVT(dAtA[:size])
+}
+
+func (m *ControlRequest_Controllers) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.Controllers != nil {
+		size, err := m.Controllers.MarshalToSizedBufferVT(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(size))
+		i--
+		dAtA[i] = 0x32
+	} else {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, 0)
+		i--
+		dAtA[i] = 0x32
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *ModCall) MarshalVT() (dAtA []byte, err error) {
 	if m == nil {
 		return nil, nil
@@ -5113,6 +5279,30 @@ func (m *HostEvent_ServiceCall) MarshalToSizedBufferVT(dAtA []byte) (int, error)
 	return len(dAtA) - i, nil
 }
 
+func (m *HostEvent_ControllersWanted) MarshalToVT(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVT(dAtA[:size])
+}
+
+func (m *HostEvent_ControllersWanted) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.ControllersWanted != nil {
+		size, err := m.ControllersWanted.MarshalToSizedBufferVT(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(size))
+		i--
+		dAtA[i] = 0x7a
+	} else {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, 0)
+		i--
+		dAtA[i] = 0x7a
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *PlayerChat) MarshalVT() (dAtA []byte, err error) {
 	if m == nil {
 		return nil, nil
@@ -5408,6 +5598,11 @@ func (m *PlayerJoined) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	_ = l
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if len(m.Address) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.Address)
+		i--
+		dAtA[i] = 0x2a
 	}
 	if m.Generation != 0 {
 		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.Generation))
@@ -6071,6 +6266,21 @@ func (m *ControlRequest_Answer) SizeVT() (n int) {
 	return n
 }
 
+func (m *ControlRequest_Controllers) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Controllers != nil {
+		l = m.Controllers.SizeVT()
+		n += protobuf_go_lite.SizeMessage(1, l)
+	} else {
+		n += 2
+	}
+	return n
+}
+
 func (m *ModCall) SizeVT() (n int) {
 	if m == nil {
 		return 0
@@ -6334,6 +6544,21 @@ func (m *HostEvent_ServiceCall) SizeVT() (n int) {
 	return n
 }
 
+func (m *HostEvent_ControllersWanted) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.ControllersWanted != nil {
+		l = m.ControllersWanted.SizeVT()
+		n += protobuf_go_lite.SizeMessage(1, l)
+	} else {
+		n += 2
+	}
+	return n
+}
+
 func (m *PlayerChat) SizeVT() (n int) {
 	if m == nil {
 		return 0
@@ -6423,6 +6648,7 @@ func (m *PlayerJoined) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.Name)
 	n += protobuf_go_lite.SizeFixed64NonZero(1, m.SteamId)
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.Generation)
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.Address)
 	n += len(m.unknownFields)
 	return n
 }
@@ -6625,6 +6851,13 @@ func (x *ControlRequest) MarshalProtoText() string {
 		} else {
 			protobuf_go_lite.TextWriteTextMarshaler(&sb, body.Answer)
 		}
+	case *ControlRequest_Controllers:
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "controllers")
+		if body.Controllers == nil {
+			protobuf_go_lite.TextWriteTextMarshaler(&sb, &controllers.ControllerFrames{})
+		} else {
+			protobuf_go_lite.TextWriteTextMarshaler(&sb, body.Controllers)
+		}
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -6805,6 +7038,13 @@ func (x *HostEvent) MarshalProtoText() string {
 		} else {
 			protobuf_go_lite.TextWriteTextMarshaler(&sb, body.ServiceCall)
 		}
+	case *HostEvent_ControllersWanted:
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "controllers_wanted")
+		if body.ControllersWanted == nil {
+			protobuf_go_lite.TextWriteTextMarshaler(&sb, &controllers.ControllerWants{})
+		} else {
+			protobuf_go_lite.TextWriteTextMarshaler(&sb, body.ControllersWanted)
+		}
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -6943,6 +7183,10 @@ func (x *PlayerJoined) MarshalProtoText() string {
 	if x.Generation != 0 {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "generation")
 		protobuf_go_lite.TextWriteUint(&sb, x.Generation)
+	}
+	if x.Address != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "address")
+		protobuf_go_lite.TextWriteString(&sb, x.Address)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -7339,6 +7583,26 @@ func (m *ControlRequest) UnmarshalVT(dAtA []byte) error {
 					return err
 				}
 				m.Body = &ControlRequest_Answer{Answer: v}
+			}
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Controllers", wireType)
+			}
+			msgStart, postIndex, err := protobuf_go_lite.DecodeLengthDelimited(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			if oneof, ok := m.Body.(*ControlRequest_Controllers); ok {
+				if err := oneof.Controllers.UnmarshalVT(dAtA[msgStart:postIndex]); err != nil {
+					return err
+				}
+			} else {
+				v := &controllers.ControllerFrames{}
+				if err := v.UnmarshalVT(dAtA[msgStart:postIndex]); err != nil {
+					return err
+				}
+				m.Body = &ControlRequest_Controllers{Controllers: v}
 			}
 			iNdEx = postIndex
 		default:
@@ -7889,6 +8153,26 @@ func (m *HostEvent) UnmarshalVT(dAtA []byte) error {
 				m.Body = &HostEvent_ServiceCall{ServiceCall: v}
 			}
 			iNdEx = postIndex
+		case 15:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ControllersWanted", wireType)
+			}
+			msgStart, postIndex, err := protobuf_go_lite.DecodeLengthDelimited(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			if oneof, ok := m.Body.(*HostEvent_ControllersWanted); ok {
+				if err := oneof.ControllersWanted.UnmarshalVT(dAtA[msgStart:postIndex]); err != nil {
+					return err
+				}
+			} else {
+				v := &controllers.ControllerWants{}
+				if err := v.UnmarshalVT(dAtA[msgStart:postIndex]); err != nil {
+					return err
+				}
+				m.Body = &HostEvent_ControllersWanted{ControllersWanted: v}
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
@@ -8368,6 +8652,16 @@ func (m *PlayerJoined) UnmarshalVT(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Address", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.Address = v
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])

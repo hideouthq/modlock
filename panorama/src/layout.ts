@@ -31,6 +31,13 @@
 //   const tip = Modlock.native.group()
 //   tip.relabel(tooltip.FindChildTraverse('ModName'), 'Snow Globe', ['ModName'])
 //   tip.release()
+//
+// A layout cleans up before its panel leaves:
+//
+//   Modlock.onUnload(() => cancelTimers())
+//
+// Each handler runs once when the renderer starts removing or replacing the
+// layout or releases the screen, and no data or route handler runs after it.
 
 import {
   actionCommand,
@@ -39,7 +46,7 @@ import {
   layoutDataChanged,
   layoutModAttribute,
   layoutNodeAttribute,
-  layoutUnloading,
+  layoutUnloadingAttribute,
   routeAttribute,
 } from './data.js'
 import {
@@ -78,8 +85,6 @@ const panel = $.GetContextPanel()
 
 /** watches holds every handler the layout registered. */
 const watches: Watch[] = []
-const cleanup: (() => void)[] = []
-let unloaded = false
 
 const owners = [new NativeChanges($, () => panel)]
 
@@ -95,14 +100,18 @@ export const native = Object.assign(owners[0]!, {
   },
 })
 
-/** onUnload runs handler before the layout's panel leaves, to cancel work. */
-export function onUnload(handler: () => void): void {
-  if (unloaded) {
-    handler()
-    return
-  }
-  cleanup.push(handler)
-}
+/** cleanups holds every unload handler the layout registered. */
+const cleanups: (() => void)[] = []
+
+/** listening records whether the PlaySoundEffect listener is registered. */
+let listening = false
+
+/** unloaded records that the layout's unload handlers have run. */
+let unloaded = false
+
+// Every layout listens, so one that only changes native panels still hears
+// that it unloads and releases them.
+listen()
 
 /**
  * data calls handler with the layout element's data now and after each
@@ -121,6 +130,20 @@ export function route(name: string, handler: Handler): void {
     $.Msg(`[Modlock] ${name} cannot name a route`)
   }
   watch(routeAttribute(name), handler)
+}
+
+/**
+ * onUnload runs handler once when the renderer starts removing or replacing
+ * the layout's panel or releases the screen, so the script can cancel timers
+ * or undo changes outside the panel.
+ */
+export function onUnload(handler: () => void): void {
+  cleanups.push(handler)
+  if (leaving()) {
+    unload()
+    return
+  }
+  listen()
 }
 
 /**
@@ -148,33 +171,38 @@ export function press(action: string, payload?: unknown): boolean {
 
 /** watch registers handler for attribute and hands it the current value. */
 function watch(attribute: string, handler: Handler): void {
+  // Ignore new watches once this panel is leaving.
+  if (leaving()) {
+    return
+  }
+
+  // Listen for changes, record the current value and hand it over now.
+  listen()
   const last = panel.GetAttributeString(attribute, '')
   watches.push({ attribute, handler, last })
   handler(parse(last))
 }
 
-// Every layout listens, so one that only changes native panels still hears
-// that it unloads and releases them.
-$.RegisterForUnhandledEvent('PlaySoundEffect', (sound: string) => {
-  if (sound === layoutDataChanged) {
-    reread()
+/** listen registers once for the renderer's change and unload event. */
+function listen(): void {
+  if (listening) {
+    return
   }
-})
-
-/** reread hands each handler whose value changed its new value. */
-function reread(): void {
-  if (unloaded || !panel.IsValid()) return
-  if (panel.GetAttributeString(layoutUnloading, '') === '1') {
-    unloaded = true
-    watches.length = 0
-    for (const handler of cleanup.splice(0)) {
-      try {
-        handler()
-      } catch (error) {
-        $.Msg(`[Modlock] layout cleanup failed: ${String(error)}`)
-      }
+  listening = true
+  $.RegisterForUnhandledEvent('PlaySoundEffect', (sound: string) => {
+    if (sound === layoutDataChanged) {
+      reread()
     }
-    for (const owner of owners) owner.release()
+  })
+}
+
+/** reread runs unload handlers when leaving, or hands changes to watches. */
+function reread(): void {
+  if (unloaded) {
+    return
+  }
+  if (leaving()) {
+    unload()
     return
   }
   for (const each of watches) {
@@ -184,6 +212,30 @@ function reread(): void {
       each.handler(parse(text))
     }
   }
+}
+
+/** leaving reports whether this layout is already unloading or gone. */
+function leaving(): boolean {
+  return unloaded || panel.IsValid?.() === false || unloading()
+}
+
+/** unloading reports whether the renderer marked this panel as leaving. */
+function unloading(): boolean {
+  return panel.GetAttributeString(layoutUnloadingAttribute, '') === '1'
+}
+
+/** unload stops data callbacks and runs each cleanup handler once. */
+function unload(): void {
+  unloaded = true
+  watches.length = 0
+  for (const handler of cleanups.splice(0)) {
+    try {
+      handler()
+    } catch (error) {
+      $.Msg(`[Modlock] layout unload failed: ${String(error)}`)
+    }
+  }
+  for (const owner of owners) owner.release()
 }
 
 /** parse reads a value's JSON, or undefined for none or for text JSON cannot read. */

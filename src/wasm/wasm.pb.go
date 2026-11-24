@@ -13,8 +13,53 @@ import (
 
 	protobuf_go_lite "github.com/aperturerobotics/protobuf-go-lite"
 	json "github.com/aperturerobotics/protobuf-go-lite/json"
+	controllers "github.com/paralin/modlock/src/wasm/controllers"
 	movement "github.com/paralin/modlock/src/wasm/movement"
 )
+
+// PingKind is how a player pinged.
+type PingKind int32
+
+const (
+	// PING_KIND_MAP is a ping on a place, a unit or the minimap.
+	PingKind_PING_KIND_MAP PingKind = 0
+	// PING_KIND_WHEEL is a line from the comms wheel or a quick ping key.
+	PingKind_PING_KIND_WHEEL PingKind = 1
+	// PING_KIND_QUICK_RESPONSE answers another player's ping.
+	PingKind_PING_KIND_QUICK_RESPONSE PingKind = 2
+	// PING_KIND_ABILITY pings one of the player's abilities or items.
+	PingKind_PING_KIND_ABILITY PingKind = 3
+)
+
+// Enum value maps for PingKind.
+var (
+	PingKind_name = map[int32]string{
+		0: "PING_KIND_MAP",
+		1: "PING_KIND_WHEEL",
+		2: "PING_KIND_QUICK_RESPONSE",
+		3: "PING_KIND_ABILITY",
+	}
+	PingKind_value = map[string]int32{
+		"PING_KIND_MAP":            0,
+		"PING_KIND_WHEEL":          1,
+		"PING_KIND_QUICK_RESPONSE": 2,
+		"PING_KIND_ABILITY":        3,
+	}
+)
+
+func (x PingKind) Enum() *PingKind {
+	p := new(PingKind)
+	*p = x
+	return p
+}
+
+func (x PingKind) String() string {
+	name, valid := PingKind_name[int32(x)]
+	if valid {
+		return name
+	}
+	return strconv.Itoa(int(x))
+}
 
 // ServiceFailure says why a service call ended without an answer.
 type ServiceFailure int32
@@ -186,6 +231,7 @@ type StartResult struct {
 	// Chat asks for a Chat event for each chat line.
 	Chat bool `protobuf:"varint,4,opt,name=chat,proto3" json:"chat,omitempty"`
 	// Joins asks for a PlayerJoined event as each player the mod serves joins,
+	// PlayerAway and PlayerReturned events as they disconnect and come back,
 	// and a PlayerLeft event as each leaves.
 	Joins bool `protobuf:"varint,5,opt,name=joins,proto3" json:"joins,omitempty"`
 	// Casts asks for an AbilityCast event after each ability the game
@@ -207,6 +253,8 @@ type StartResult struct {
 	Melees bool `protobuf:"varint,11,opt,name=melees,proto3" json:"melees,omitempty"`
 	// Parries asks for a Parried event after each parry that catches a swing.
 	Parries bool `protobuf:"varint,12,opt,name=parries,proto3" json:"parries,omitempty"`
+	// Pings asks for a Ping event before each ping a player sends.
+	Pings bool `protobuf:"varint,13,opt,name=pings,proto3" json:"pings,omitempty"`
 }
 
 func (x *StartResult) Reset() {
@@ -299,6 +347,13 @@ func (x *StartResult) GetParries() bool {
 	return false
 }
 
+func (x *StartResult) GetPings() bool {
+	if x != nil {
+		return x.Pings
+	}
+	return false
+}
+
 // FrameEvent identifies one server frame.
 type FrameEvent struct {
 	unknownFields []byte
@@ -313,6 +368,9 @@ type FrameEvent struct {
 	// Movement. A kind it lacks, such as on a game build whose completion it
 	// cannot find, is unknown rather than absent from the samples.
 	Interactions []movement.InteractionKind `protobuf:"varint,4,rep,packed,name=interactions,proto3" json:"interactions,omitempty"`
+	// Controllers holds each watched player's controllers in every frame, with
+	// the presses and releases since the mod's previous frame.
+	Controllers []*controllers.PlayerControllers `protobuf:"bytes,5,rep,name=controllers,proto3" json:"controllers,omitempty"`
 }
 
 func (x *FrameEvent) Reset() {
@@ -345,6 +403,13 @@ func (x *FrameEvent) GetMovement() []*movement.MovementSample {
 func (x *FrameEvent) GetInteractions() []movement.InteractionKind {
 	if x != nil {
 		return x.Interactions
+	}
+	return nil
+}
+
+func (x *FrameEvent) GetControllers() []*controllers.PlayerControllers {
+	if x != nil {
+		return x.Controllers
 	}
 	return nil
 }
@@ -428,6 +493,88 @@ func (x *ChatEvent) GetLane() int32 {
 		return x.Lane
 	}
 	return 0
+}
+
+// PingEvent carries one ping a player sent, before anyone sees it.
+type PingEvent struct {
+	unknownFields []byte
+	// Player is the player who pinged.
+	Player int32 `protobuf:"varint,1,opt,name=player,proto3" json:"player,omitempty"`
+	// Kind is how they pinged.
+	Kind PingKind `protobuf:"varint,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	// Option is the comms wheel line for a wheel ping, the
+	// m_unPingWheelOptionID of the game's scripts/ping_wheel_messages.vdata,
+	// and zero for another kind.
+	Option uint32 `protobuf:"varint,3,opt,name=option,proto3" json:"option,omitempty"`
+	// Concept is the voice line the ping speaks, a CitadelConcept_t value, or
+	// zero for none.
+	Concept int32 `protobuf:"varint,4,opt,name=concept,proto3" json:"concept,omitempty"`
+}
+
+func (x *PingEvent) Reset() {
+	*x = PingEvent{}
+}
+
+func (*PingEvent) ProtoMessage() {}
+
+func (x *PingEvent) GetPlayer() int32 {
+	if x != nil {
+		return x.Player
+	}
+	return 0
+}
+
+func (x *PingEvent) GetKind() PingKind {
+	if x != nil {
+		return x.Kind
+	}
+	return PingKind_PING_KIND_MAP
+}
+
+func (x *PingEvent) GetOption() uint32 {
+	if x != nil {
+		return x.Option
+	}
+	return 0
+}
+
+func (x *PingEvent) GetConcept() int32 {
+	if x != nil {
+		return x.Concept
+	}
+	return 0
+}
+
+// PingResult answers a Ping event.
+type PingResult struct {
+	unknownFields []byte
+	// Block drops the ping for every player, the sender included: its marker,
+	// sound, voice line and chat line.
+	Block bool `protobuf:"varint,1,opt,name=block,proto3" json:"block,omitempty"`
+	// MuteVoice lists the players, by slot, who get a ping that is not blocked
+	// without its voice line: they still see its marker and hear its sound.
+	// The other recipients get it whole.
+	MuteVoice []int32 `protobuf:"varint,2,rep,packed,name=mute_voice,json=muteVoice,proto3" json:"muteVoice,omitempty"`
+}
+
+func (x *PingResult) Reset() {
+	*x = PingResult{}
+}
+
+func (*PingResult) ProtoMessage() {}
+
+func (x *PingResult) GetBlock() bool {
+	if x != nil {
+		return x.Block
+	}
+	return false
+}
+
+func (x *PingResult) GetMuteVoice() []int32 {
+	if x != nil {
+		return x.MuteVoice
+	}
+	return nil
 }
 
 // CommandResult answers whether the mod handled a command.
@@ -802,6 +949,7 @@ func (m *StartResult) CloneVT() *StartResult {
 	r.Levels = m.Levels
 	r.Melees = m.Melees
 	r.Parries = m.Parries
+	r.Pings = m.Pings
 	r.ModifierEvents = protobuf_go_lite.CloneSlice(m.ModifierEvents)
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
@@ -822,6 +970,7 @@ func (m *FrameEvent) CloneVT() *FrameEvent {
 	r.TimeSeconds = m.TimeSeconds
 	r.Movement = protobuf_go_lite.CloneVTSlice(m.Movement)
 	r.Interactions = protobuf_go_lite.CloneSlice(m.Interactions)
+	r.Controllers = protobuf_go_lite.CloneVTSlice(m.Controllers)
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -865,6 +1014,42 @@ func (m *ChatEvent) CloneVT() *ChatEvent {
 }
 
 func (m *ChatEvent) CloneMessageVT() protobuf_go_lite.CloneMessage {
+	return m.CloneVT()
+}
+
+func (m *PingEvent) CloneVT() *PingEvent {
+	if m == nil {
+		return (*PingEvent)(nil)
+	}
+	r := new(PingEvent)
+	r.Player = m.Player
+	r.Kind = m.Kind
+	r.Option = m.Option
+	r.Concept = m.Concept
+	if len(m.unknownFields) > 0 {
+		r.unknownFields = slices.Clone(m.unknownFields)
+	}
+	return r
+}
+
+func (m *PingEvent) CloneMessageVT() protobuf_go_lite.CloneMessage {
+	return m.CloneVT()
+}
+
+func (m *PingResult) CloneVT() *PingResult {
+	if m == nil {
+		return (*PingResult)(nil)
+	}
+	r := new(PingResult)
+	r.Block = m.Block
+	r.MuteVoice = protobuf_go_lite.CloneSlice(m.MuteVoice)
+	if len(m.unknownFields) > 0 {
+		r.unknownFields = slices.Clone(m.unknownFields)
+	}
+	return r
+}
+
+func (m *PingResult) CloneMessageVT() protobuf_go_lite.CloneMessage {
 	return m.CloneVT()
 }
 
@@ -1168,6 +1353,9 @@ func (this *StartResult) EqualVT(that *StartResult) bool {
 	if this.Parries != that.Parries {
 		return false
 	}
+	if this.Pings != that.Pings {
+		return false
+	}
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
@@ -1195,6 +1383,9 @@ func (this *FrameEvent) EqualVT(that *FrameEvent) bool {
 		return false
 	}
 	if !protobuf_go_lite.EqualSlice(this.Interactions, that.Interactions) {
+		return false
+	}
+	if !protobuf_go_lite.EqualVTSliceImplicit(this.Controllers, that.Controllers, func() *controllers.PlayerControllers { return &controllers.PlayerControllers{} }) {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -1254,6 +1445,58 @@ func (this *ChatEvent) EqualVT(that *ChatEvent) bool {
 
 func (this *ChatEvent) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*ChatEvent)
+	if !ok {
+		return false
+	}
+	return this.EqualVT(that)
+}
+
+func (this *PingEvent) EqualVT(that *PingEvent) bool {
+	if this == that {
+		return true
+	} else if this == nil || that == nil {
+		return false
+	}
+	if this.Player != that.Player {
+		return false
+	}
+	if this.Kind != that.Kind {
+		return false
+	}
+	if this.Option != that.Option {
+		return false
+	}
+	if this.Concept != that.Concept {
+		return false
+	}
+	return string(this.unknownFields) == string(that.unknownFields)
+}
+
+func (this *PingEvent) EqualMessageVT(thatMsg any) bool {
+	that, ok := thatMsg.(*PingEvent)
+	if !ok {
+		return false
+	}
+	return this.EqualVT(that)
+}
+
+func (this *PingResult) EqualVT(that *PingResult) bool {
+	if this == that {
+		return true
+	} else if this == nil || that == nil {
+		return false
+	}
+	if this.Block != that.Block {
+		return false
+	}
+	if !protobuf_go_lite.EqualSlice(this.MuteVoice, that.MuteVoice) {
+		return false
+	}
+	return string(this.unknownFields) == string(that.unknownFields)
+}
+
+func (this *PingResult) EqualMessageVT(thatMsg any) bool {
+	that, ok := thatMsg.(*PingResult)
 	if !ok {
 		return false
 	}
@@ -1485,6 +1728,46 @@ func (this *PrecacheOptions) EqualMessageVT(thatMsg any) bool {
 		return false
 	}
 	return this.EqualVT(that)
+}
+
+// MarshalProtoJSON marshals the PingKind to JSON.
+func (x PingKind) MarshalProtoJSON(s *json.MarshalState) {
+	s.WriteEnum(int32(x), PingKind_name)
+}
+
+// MarshalText marshals the PingKind to text.
+func (x PingKind) MarshalText() ([]byte, error) {
+	return []byte(json.GetEnumString(int32(x), PingKind_name)), nil
+}
+
+// MarshalJSON marshals the PingKind to JSON.
+func (x PingKind) MarshalJSON() ([]byte, error) {
+	return json.DefaultMarshalerConfig.Marshal(x)
+}
+
+// UnmarshalProtoJSON unmarshals the PingKind from JSON.
+func (x *PingKind) UnmarshalProtoJSON(s *json.UnmarshalState) {
+	v := s.ReadEnum(PingKind_value)
+	if err := s.Err(); err != nil {
+		s.SetErrorf("could not read PingKind enum: %v", err)
+		return
+	}
+	*x = PingKind(v)
+}
+
+// UnmarshalText unmarshals the PingKind from text.
+func (x *PingKind) UnmarshalText(b []byte) error {
+	i, err := json.ParseEnumString(string(b), PingKind_value)
+	if err != nil {
+		return err
+	}
+	*x = PingKind(i)
+	return nil
+}
+
+// UnmarshalJSON unmarshals the PingKind from JSON.
+func (x *PingKind) UnmarshalJSON(b []byte) error {
+	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
 }
 
 // MarshalProtoJSON marshals the ServiceFailure to JSON.
@@ -1787,6 +2070,11 @@ func (x *StartResult) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("parries")
 		s.WriteBool(x.Parries)
 	}
+	if x.Pings || s.HasField("pings") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("pings")
+		s.WriteBool(x.Pings)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -1844,6 +2132,9 @@ func (x *StartResult) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "parries":
 			s.AddField("parries")
 			x.Parries = s.ReadBool()
+		case "pings":
+			s.AddField("pings")
+			x.Pings = s.ReadBool()
 		}
 	})
 }
@@ -1890,6 +2181,17 @@ func (x *FrameEvent) MarshalProtoJSON(s *json.MarshalState) {
 		for _, element := range x.Interactions {
 			s.WriteMoreIf(&wroteElement)
 			element.MarshalProtoJSON(s)
+		}
+		s.WriteArrayEnd()
+	}
+	if len(x.Controllers) > 0 || s.HasField("controllers") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("controllers")
+		s.WriteArrayStart()
+		var wroteElement bool
+		for _, element := range x.Controllers {
+			s.WriteMoreIf(&wroteElement)
+			element.MarshalProtoJSON(s.WithField("controllers"))
 		}
 		s.WriteArrayEnd()
 	}
@@ -1944,6 +2246,24 @@ func (x *FrameEvent) UnmarshalProtoJSON(s *json.UnmarshalState) {
 				var v movement.InteractionKind
 				v.UnmarshalProtoJSON(s)
 				x.Interactions = append(x.Interactions, v)
+			})
+		case "controllers":
+			s.AddField("controllers")
+			if s.ReadNil() {
+				x.Controllers = nil
+				return
+			}
+			s.ReadArray(func() {
+				if s.ReadNil() {
+					x.Controllers = append(x.Controllers, nil)
+					return
+				}
+				v := &controllers.PlayerControllers{}
+				v.UnmarshalProtoJSON(s.WithField("controllers", false))
+				if s.Err() != nil {
+					return
+				}
+				x.Controllers = append(x.Controllers, v)
 			})
 		}
 	})
@@ -2067,6 +2387,126 @@ func (x *ChatEvent) UnmarshalProtoJSON(s *json.UnmarshalState) {
 
 // UnmarshalJSON unmarshals the ChatEvent from JSON.
 func (x *ChatEvent) UnmarshalJSON(b []byte) error {
+	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
+}
+
+// MarshalProtoJSON marshals the PingEvent message to JSON.
+func (x *PingEvent) MarshalProtoJSON(s *json.MarshalState) {
+	if x == nil {
+		s.WriteNil()
+		return
+	}
+	s.WriteObjectStart()
+	var wroteField bool
+	if x.Player != 0 || s.HasField("player") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("player")
+		s.WriteInt32(x.Player)
+	}
+	if x.Kind != 0 || s.HasField("kind") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("kind")
+		x.Kind.MarshalProtoJSON(s)
+	}
+	if x.Option != 0 || s.HasField("option") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("option")
+		s.WriteUint32(x.Option)
+	}
+	if x.Concept != 0 || s.HasField("concept") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("concept")
+		s.WriteInt32(x.Concept)
+	}
+	s.WriteObjectEnd()
+}
+
+// MarshalJSON marshals the PingEvent to JSON.
+func (x *PingEvent) MarshalJSON() ([]byte, error) {
+	return json.DefaultMarshalerConfig.Marshal(x)
+}
+
+// UnmarshalProtoJSON unmarshals the PingEvent message from JSON.
+func (x *PingEvent) UnmarshalProtoJSON(s *json.UnmarshalState) {
+	if s.ReadNil() {
+		return
+	}
+	s.ReadObject(func(key string) {
+		switch key {
+		default:
+			s.Skip() // ignore unknown field
+		case "player":
+			s.AddField("player")
+			x.Player = s.ReadInt32()
+		case "kind":
+			s.AddField("kind")
+			x.Kind.UnmarshalProtoJSON(s)
+		case "option":
+			s.AddField("option")
+			x.Option = s.ReadUint32()
+		case "concept":
+			s.AddField("concept")
+			x.Concept = s.ReadInt32()
+		}
+	})
+}
+
+// UnmarshalJSON unmarshals the PingEvent from JSON.
+func (x *PingEvent) UnmarshalJSON(b []byte) error {
+	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
+}
+
+// MarshalProtoJSON marshals the PingResult message to JSON.
+func (x *PingResult) MarshalProtoJSON(s *json.MarshalState) {
+	if x == nil {
+		s.WriteNil()
+		return
+	}
+	s.WriteObjectStart()
+	var wroteField bool
+	if x.Block || s.HasField("block") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("block")
+		s.WriteBool(x.Block)
+	}
+	if len(x.MuteVoice) > 0 || s.HasField("muteVoice") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("muteVoice")
+		s.WriteInt32Array(x.MuteVoice)
+	}
+	s.WriteObjectEnd()
+}
+
+// MarshalJSON marshals the PingResult to JSON.
+func (x *PingResult) MarshalJSON() ([]byte, error) {
+	return json.DefaultMarshalerConfig.Marshal(x)
+}
+
+// UnmarshalProtoJSON unmarshals the PingResult message from JSON.
+func (x *PingResult) UnmarshalProtoJSON(s *json.UnmarshalState) {
+	if s.ReadNil() {
+		return
+	}
+	s.ReadObject(func(key string) {
+		switch key {
+		default:
+			s.Skip() // ignore unknown field
+		case "block":
+			s.AddField("block")
+			x.Block = s.ReadBool()
+		case "mute_voice", "muteVoice":
+			s.AddField("mute_voice")
+			if s.ReadNil() {
+				x.MuteVoice = nil
+				return
+			}
+			x.MuteVoice = s.ReadInt32Array()
+		}
+	})
+}
+
+// UnmarshalJSON unmarshals the PingResult from JSON.
+func (x *PingResult) UnmarshalJSON(b []byte) error {
 	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
 }
 
@@ -2764,6 +3204,11 @@ func (m *StartResult) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if m.Pings {
+		i = protobuf_go_lite.EncodeBool(dAtA, i, m.Pings)
+		i--
+		dAtA[i] = 0x68
+	}
 	if m.Parries {
 		i = protobuf_go_lite.EncodeBool(dAtA, i, m.Parries)
 		i--
@@ -2857,6 +3302,18 @@ func (m *FrameEvent) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	_ = l
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if len(m.Controllers) > 0 {
+		for iNdEx := len(m.Controllers) - 1; iNdEx >= 0; iNdEx-- {
+			size, err := m.Controllers[iNdEx].MarshalToSizedBufferVT(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(size))
+			i--
+			dAtA[i] = 0x2a
+		}
 	}
 	if len(m.Interactions) > 0 {
 		i = protobuf_go_lite.EncodeVarintPacked(dAtA, i, m.Interactions)
@@ -2976,6 +3433,100 @@ func (m *ChatEvent) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	}
 	if m.Player != 0 {
 		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.Player))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *PingEvent) MarshalVT() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVT(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *PingEvent) MarshalToVT(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVT(dAtA[:size])
+}
+
+func (m *PingEvent) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if m.Concept != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.Concept))
+		i--
+		dAtA[i] = 0x20
+	}
+	if m.Option != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.Option))
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.Kind != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.Kind))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.Player != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.Player))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *PingResult) MarshalVT() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVT(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *PingResult) MarshalToVT(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVT(dAtA[:size])
+}
+
+func (m *PingResult) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if len(m.MuteVoice) > 0 {
+		i = protobuf_go_lite.EncodeVarintPacked(dAtA, i, m.MuteVoice)
+		i--
+		dAtA[i] = 0x12
+	}
+	if m.Block {
+		i = protobuf_go_lite.EncodeBool(dAtA, i, m.Block)
 		i--
 		dAtA[i] = 0x8
 	}
@@ -3466,6 +4017,7 @@ func (m *StartResult) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.Levels)
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.Melees)
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.Parries)
+	n += protobuf_go_lite.SizeBoolNonZero(1, m.Pings)
 	n += len(m.unknownFields)
 	return n
 }
@@ -3483,6 +4035,10 @@ func (m *FrameEvent) SizeVT() (n int) {
 		n += protobuf_go_lite.SizeMessage(1, l)
 	}
 	n += protobuf_go_lite.SizeVarintPacked(1, m.Interactions)
+	for _, e := range m.Controllers {
+		l = e.SizeVT()
+		n += protobuf_go_lite.SizeMessage(1, l)
+	}
 	n += len(m.unknownFields)
 	return n
 }
@@ -3509,6 +4065,32 @@ func (m *ChatEvent) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.Text)
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.All)
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.Lane)
+	n += len(m.unknownFields)
+	return n
+}
+
+func (m *PingEvent) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.Player)
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.Kind)
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.Option)
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.Concept)
+	n += len(m.unknownFields)
+	return n
+}
+
+func (m *PingResult) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	n += protobuf_go_lite.SizeBoolNonZero(1, m.Block)
+	n += protobuf_go_lite.SizeVarintPacked(1, m.MuteVoice)
 	n += len(m.unknownFields)
 	return n
 }
@@ -3630,6 +4212,10 @@ func (m *PrecacheOptions) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeStringSlice(1, m.Resources)
 	n += len(m.unknownFields)
 	return n
+}
+
+func (x PingKind) MarshalProtoText() string {
+	return x.String()
 }
 
 func (x ServiceFailure) MarshalProtoText() string {
@@ -3763,6 +4349,10 @@ func (x *StartResult) MarshalProtoText() string {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "parries")
 		protobuf_go_lite.TextWriteBool(&sb, x.Parries)
 	}
+	if x.Pings != false {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "pings")
+		protobuf_go_lite.TextWriteBool(&sb, x.Pings)
+	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
 
@@ -3798,6 +4388,18 @@ func (x *FrameEvent) MarshalProtoText() string {
 		for i, v := range x.Interactions {
 			protobuf_go_lite.TextWriteListSeparator(&sb, i)
 			protobuf_go_lite.TextWriteStringer(&sb, movement.InteractionKind(v))
+		}
+		protobuf_go_lite.TextWriteListEnd(&sb)
+	}
+	if len(x.Controllers) > 0 {
+		protobuf_go_lite.TextWriteListStart(&sb, initialLen, "controllers")
+		for i, v := range x.Controllers {
+			protobuf_go_lite.TextWriteListSeparator(&sb, i)
+			if v == nil {
+				protobuf_go_lite.TextWriteTextMarshaler(&sb, &controllers.PlayerControllers{})
+			} else {
+				protobuf_go_lite.TextWriteTextMarshaler(&sb, v)
+			}
 		}
 		protobuf_go_lite.TextWriteListEnd(&sb)
 	}
@@ -3849,6 +4451,54 @@ func (x *ChatEvent) MarshalProtoText() string {
 }
 
 func (x *ChatEvent) String() string {
+	return x.MarshalProtoText()
+}
+
+func (x *PingEvent) MarshalProtoText() string {
+	var sb protobuf_go_lite.TextBuilder
+	initialLen := protobuf_go_lite.TextStartMessage(&sb, "PingEvent")
+	if x.Player != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "player")
+		protobuf_go_lite.TextWriteInt(&sb, x.Player)
+	}
+	if x.Kind != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "kind")
+		protobuf_go_lite.TextWriteStringer(&sb, PingKind(x.Kind))
+	}
+	if x.Option != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "option")
+		protobuf_go_lite.TextWriteUint(&sb, x.Option)
+	}
+	if x.Concept != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "concept")
+		protobuf_go_lite.TextWriteInt(&sb, x.Concept)
+	}
+	return protobuf_go_lite.TextFinishMessage(&sb)
+}
+
+func (x *PingEvent) String() string {
+	return x.MarshalProtoText()
+}
+
+func (x *PingResult) MarshalProtoText() string {
+	var sb protobuf_go_lite.TextBuilder
+	initialLen := protobuf_go_lite.TextStartMessage(&sb, "PingResult")
+	if x.Block != false {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "block")
+		protobuf_go_lite.TextWriteBool(&sb, x.Block)
+	}
+	if len(x.MuteVoice) > 0 {
+		protobuf_go_lite.TextWriteListStart(&sb, initialLen, "mute_voice")
+		for i, v := range x.MuteVoice {
+			protobuf_go_lite.TextWriteListSeparator(&sb, i)
+			protobuf_go_lite.TextWriteInt(&sb, v)
+		}
+		protobuf_go_lite.TextWriteListEnd(&sb)
+	}
+	return protobuf_go_lite.TextFinishMessage(&sb)
+}
+
+func (x *PingResult) String() string {
 	return x.MarshalProtoText()
 }
 
@@ -4412,6 +5062,16 @@ func (m *StartResult) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			m.Parries = bool(v)
+		case 13:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Pings", wireType)
+			}
+			var v bool
+			v, iNdEx, err = protobuf_go_lite.DecodeVarintBool(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.Pings = bool(v)
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
@@ -4523,6 +5183,19 @@ func (m *FrameEvent) UnmarshalVT(dAtA []byte) error {
 			} else {
 				return fmt.Errorf("proto: wrong wireType = %d for field Interactions", wireType)
 			}
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Controllers", wireType)
+			}
+			msgStart, postIndex, err := protobuf_go_lite.DecodeLengthDelimited(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.Controllers = append(m.Controllers, &controllers.PlayerControllers{})
+			if err := m.Controllers[len(m.Controllers)-1].UnmarshalVT(dAtA[msgStart:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
@@ -4665,6 +5338,170 @@ func (m *ChatEvent) UnmarshalVT(dAtA []byte) error {
 			m.Lane, iNdEx, err = protobuf_go_lite.DecodeVarintInt32(dAtA, iNdEx)
 			if err != nil {
 				return err
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return protobuf_go_lite.ErrInvalidLength
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+
+func (m *PingEvent) UnmarshalVT(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	var err error
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		wire, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+		if err != nil {
+			return err
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: PingEvent: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: PingEvent: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Player", wireType)
+			}
+			m.Player = 0
+			m.Player, iNdEx, err = protobuf_go_lite.DecodeVarintInt32(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Kind", wireType)
+			}
+			m.Kind = 0
+			var _v uint64
+			_v, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+			m.Kind = PingKind(_v)
+			if err != nil {
+				return err
+			}
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Option", wireType)
+			}
+			m.Option = 0
+			m.Option, iNdEx, err = protobuf_go_lite.DecodeVarintUint32(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Concept", wireType)
+			}
+			m.Concept = 0
+			m.Concept, iNdEx, err = protobuf_go_lite.DecodeVarintInt32(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return protobuf_go_lite.ErrInvalidLength
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+
+func (m *PingResult) UnmarshalVT(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	var err error
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		wire, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+		if err != nil {
+			return err
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: PingResult: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: PingResult: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Block", wireType)
+			}
+			var v bool
+			v, iNdEx, err = protobuf_go_lite.DecodeVarintBool(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.Block = bool(v)
+		case 2:
+			if wireType == 0 {
+				var v int32
+				v, iNdEx, err = protobuf_go_lite.DecodeVarintInt32(dAtA, iNdEx)
+				if err != nil {
+					return err
+				}
+				m.MuteVoice = append(m.MuteVoice, v)
+			} else if wireType == 2 {
+				packedStart, postIndex, err := protobuf_go_lite.DecodeLengthDelimited(dAtA, iNdEx)
+				if err != nil {
+					return err
+				}
+				iNdEx = packedStart
+				var elementCount int
+				elementCount = protobuf_go_lite.PackedVarintElementCount(dAtA[iNdEx:postIndex])
+				if elementCount != 0 && len(m.MuteVoice) == 0 {
+					m.MuteVoice = make([]int32, 0, elementCount)
+				}
+				for iNdEx < postIndex {
+					var v int32
+					v, iNdEx, err = protobuf_go_lite.DecodeVarintInt32(dAtA, iNdEx)
+					if err != nil {
+						return err
+					}
+					m.MuteVoice = append(m.MuteVoice, v)
+				}
+			} else {
+				return fmt.Errorf("proto: wrong wireType = %d for field MuteVoice", wireType)
 			}
 		default:
 			iNdEx = preIndex

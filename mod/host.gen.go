@@ -9,6 +9,7 @@ import (
 	wasmpb "github.com/paralin/modlock/src/wasm"
 	abilitiespb "github.com/paralin/modlock/src/wasm/abilities"
 	combatpb "github.com/paralin/modlock/src/wasm/combat"
+	controllerspb "github.com/paralin/modlock/src/wasm/controllers"
 	effectspb "github.com/paralin/modlock/src/wasm/effects"
 	entitiespb "github.com/paralin/modlock/src/wasm/entities"
 	fieldspb "github.com/paralin/modlock/src/wasm/fields"
@@ -102,6 +103,71 @@ const (
 	// Definition_FileFileModifiers is scripts/modifiers.vdata, the standalone modifiers, and
 	// the modifiers embedded in abilities, named as <ability>/<modifier>.
 	Definition_FileFileModifiers = wasmpb.Definition_FILE_MODIFIERS
+)
+
+// ControllerStream is the state of the stream that brings one player's
+// controllers to the host, as a mod reads it.
+type ControllerStream = controllerspb.ControllerStream
+
+// The values of ControllerStream.
+const (
+	// ControllerStreamNone means no client streams the player's controllers
+	// yet: none is linked, the link dropped, or the client has not answered
+	// the watch. A mod sees no controllers.
+	ControllerStreamNone = controllerspb.ControllerStream_CONTROLLER_STREAM_NONE
+	// ControllerStreamLive means frames arrive and the game has focus.
+	ControllerStreamLive = controllerspb.ControllerStream_CONTROLLER_STREAM_LIVE
+	// ControllerStreamUnfocused means frames arrive while the player's game
+	// window does not have focus. The controllers are listed with nothing held
+	// and every axis at rest.
+	ControllerStreamUnfocused = controllerspb.ControllerStream_CONTROLLER_STREAM_UNFOCUSED
+	// ControllerStreamStale means the stream is linked but no frame arrived
+	// within its deadline. The controllers keep their last state, so a short
+	// gap does not cut a held throttle; the mod decides what a long one means.
+	ControllerStreamStale = controllerspb.ControllerStream_CONTROLLER_STREAM_STALE
+)
+
+// GamepadButton names one button of the gamepad layout, by position as SDL
+// names them: South is A on an Xbox controller and Cross on a PlayStation one.
+type GamepadButton = controllerspb.GamepadButton
+
+// The values of GamepadButton.
+const (
+	// GamepadButtonSouth is the bottom face button.
+	GamepadButtonSouth = controllerspb.GamepadButton_GAMEPAD_BUTTON_SOUTH
+	// GamepadButtonEast is the right face button.
+	GamepadButtonEast = controllerspb.GamepadButton_GAMEPAD_BUTTON_EAST
+	// GamepadButtonWest is the left face button.
+	GamepadButtonWest = controllerspb.GamepadButton_GAMEPAD_BUTTON_WEST
+	// GamepadButtonNorth is the top face button.
+	GamepadButtonNorth = controllerspb.GamepadButton_GAMEPAD_BUTTON_NORTH
+	// GamepadButtonBack is the View, Select or Share button.
+	GamepadButtonBack = controllerspb.GamepadButton_GAMEPAD_BUTTON_BACK
+	// GamepadButtonGuide is the Xbox, PS or Home button.
+	GamepadButtonGuide = controllerspb.GamepadButton_GAMEPAD_BUTTON_GUIDE
+	// GamepadButtonStart is the Menu, Start or Options button.
+	GamepadButtonStart = controllerspb.GamepadButton_GAMEPAD_BUTTON_START
+	// GamepadButtonLeftStick is the left stick pressed in.
+	GamepadButtonLeftStick = controllerspb.GamepadButton_GAMEPAD_BUTTON_LEFT_STICK
+	// GamepadButtonRightStick is the right stick pressed in.
+	GamepadButtonRightStick = controllerspb.GamepadButton_GAMEPAD_BUTTON_RIGHT_STICK
+	// GamepadButtonLeftShoulder is the left bumper.
+	GamepadButtonLeftShoulder = controllerspb.GamepadButton_GAMEPAD_BUTTON_LEFT_SHOULDER
+	// GamepadButtonRightShoulder is the right bumper.
+	GamepadButtonRightShoulder = controllerspb.GamepadButton_GAMEPAD_BUTTON_RIGHT_SHOULDER
+	// GamepadButtonDpadUp is the directional pad's up.
+	GamepadButtonDpadUp = controllerspb.GamepadButton_GAMEPAD_BUTTON_DPAD_UP
+	// GamepadButtonDpadDown is the directional pad's down.
+	GamepadButtonDpadDown = controllerspb.GamepadButton_GAMEPAD_BUTTON_DPAD_DOWN
+	// GamepadButtonDpadLeft is the directional pad's left.
+	GamepadButtonDpadLeft = controllerspb.GamepadButton_GAMEPAD_BUTTON_DPAD_LEFT
+	// GamepadButtonDpadRight is the directional pad's right.
+	GamepadButtonDpadRight = controllerspb.GamepadButton_GAMEPAD_BUTTON_DPAD_RIGHT
+	// GamepadButtonMisc is the extra button some pads have, such as the
+	// Xbox Share button or the PlayStation microphone button.
+	GamepadButtonMisc = controllerspb.GamepadButton_GAMEPAD_BUTTON_MISC
+	// GamepadButtonTouchpad is the PlayStation touchpad pressed.
+	GamepadButtonTouchpad = controllerspb.GamepadButton_GAMEPAD_BUTTON_TOUCHPAD
 )
 
 // MovementAction is a movement fact the game announced for a hero.
@@ -334,6 +400,21 @@ const (
 	CameraParamHorizontalOffset = playerspb.CameraParam_CAMERA_PARAM_HORIZONTAL_OFFSET
 )
 
+// PingKind is how a player pinged.
+type PingKind = wasmpb.PingKind
+
+// The values of PingKind.
+const (
+	// PingKindMap is a ping on a place, a unit or the minimap.
+	PingKindMap = wasmpb.PingKind_PING_KIND_MAP
+	// PingKindWheel is a line from the comms wheel or a quick ping key.
+	PingKindWheel = wasmpb.PingKind_PING_KIND_WHEEL
+	// PingKindQuickResponse answers another player's ping.
+	PingKindQuickResponse = wasmpb.PingKind_PING_KIND_QUICK_RESPONSE
+	// PingKindAbility pings one of the player's abilities or items.
+	PingKindAbility = wasmpb.PingKind_PING_KIND_ABILITY
+)
+
 // ServiceFailure says why a service call ended without an answer.
 type ServiceFailure = wasmpb.ServiceFailure
 
@@ -462,6 +543,23 @@ type SettingChangedEvent = settingspb.SettingChangedEvent
 // same file, entry and path a Definition's fields use.
 type DefinitionFieldOptions = wasmpb.DefinitionFieldOptions
 
+// ControllerInfo describes one device a client reads.
+type ControllerInfo = controllerspb.ControllerInfo
+
+// Gamepad is a device's gamepad layer, with named sticks, triggers and
+// buttons, for a device whose layout SDL knows.
+type Gamepad = controllerspb.Gamepad
+
+// ControllerState is one device's inputs, the raw joystick layer always and
+// the gamepad layer when SDL knows the device.
+type ControllerState = controllerspb.ControllerState
+
+// Controller is one device as a mod reads it.
+type Controller = controllerspb.Controller
+
+// PlayerControllers is one watched player's controllers in a frame.
+type PlayerControllers = controllerspb.PlayerControllers
+
 // MovementSample is one watched hero's movement on one tick, as the game keeps
 // it. A hero whose position, velocity or ground the game does not provide has
 // no sample; another field the game did not provide is absent or zero.
@@ -519,7 +617,8 @@ type FogOptions = objectspb.FogOptions
 // RestoredEvent reports how a RestoreHero ended.
 type RestoredEvent = playerspb.RestoredEvent
 
-// PlayersChangedEvent holds every occupied player slot, as Players lists them.
+// PlayersChangedEvent holds every player slot with a seat, connected or
+// away, as Players lists them.
 type PlayersChangedEvent = playerspb.PlayersChangedEvent
 
 // PlayerJoinedEvent reports a player who joined the mod: a human who finished
@@ -527,12 +626,25 @@ type PlayersChangedEvent = playerspb.PlayersChangedEvent
 // the mod starts or begins to serve them.
 type PlayerJoinedEvent = playerspb.PlayerJoinedEvent
 
+// PlayerAwayEvent reports a joined player whose client disconnected while the
+// server holds their seat. Their controller and hero stay in the game, and the
+// player may return to them.
+type PlayerAwayEvent = playerspb.PlayerAwayEvent
+
+// PlayerReturnedEvent reports an away player who reconnected to their seat
+// and finished joining again. The seat, its generation and its hero are the
+// ones they left.
+type PlayerReturnedEvent = playerspb.PlayerReturnedEvent
+
 // PlayerLeftEvent reports a player leaving the mod, once for each
 // PlayerJoinedEvent.
 type PlayerLeftEvent = playerspb.PlayerLeftEvent
 
 // Connection is one occupied player slot.
 type Connection = playerspb.Connection
+
+// PlayerPawn is one player's pawn.
+type PlayerPawn = playerspb.PlayerPawn
 
 // Pawn is one player's pawn this frame: their hero, or the game's placeholder
 // before a hero is selected.
@@ -624,6 +736,12 @@ type CommandEvent = wasmpb.CommandEvent
 // ChatEvent carries one chat line as the server accepted it, commands
 // included.
 type ChatEvent = wasmpb.ChatEvent
+
+// PingEvent carries one ping a player sent, before anyone sees it.
+type PingEvent = wasmpb.PingEvent
+
+// PingResult answers a Ping event.
+type PingResult = wasmpb.PingResult
 
 // CommandResult answers whether the mod handled a command.
 type CommandResult = wasmpb.CommandResult
@@ -812,6 +930,18 @@ func (p Player) Pawn() (*Pawn, error) {
 		return nil, err
 	}
 	return response.GetPawn(), nil
+}
+
+// Pawns returns every player's pawn this frame in one reply, in slot order,
+// each as Pawn returns it: a mode that reads every hero each frame makes
+// one call instead of one per player. A slot Pawn answers nothing for is
+// left out.
+func Pawns() ([]*PlayerPawn, error) {
+	response := &playerspb.PawnsResponse{}
+	if err := invoke("Pawns", &wasmpb.Empty{}, response); err != nil {
+		return nil, err
+	}
+	return response.GetPawns(), nil
 }
 
 // Setting returns the player's value of a setting the manifest
@@ -1120,7 +1250,7 @@ func (p Player) ReplaceAbility(index uint32, ability string, keep *bool) error {
 // hero with no expiry, giving it back whenever the game removes it or the
 // hero returns. Every hero that gains the modifier from the same ability
 // keeps it until the hold ends. Releasing leaves the hero's current
-// modifier until it dies.
+// modifier until it dies; the mod stopping removes it.
 func (p Player) HoldModifier(modifier string, active *bool) error {
 	return invoke("HoldModifier", &abilitiespb.HoldModifierRequest{Player: p.Slot(), Modifier: modifier, Active: active}, nil)
 }
@@ -1951,6 +2081,14 @@ func (p Player) WatchMovement(watch bool) error {
 	return invoke("WatchMovement", &movementpb.WatchMovementRequest{Player: p.Slot(), Watch: watch}, nil)
 }
 
+// WatchControllers adds a player's controllers to the controller lists of
+// each Frame event, or removes them. The player's client reads the devices
+// only while some mod watches them, and until it answers the player is
+// listed with no stream.
+func (p Player) WatchControllers(watch bool) error {
+	return invoke("WatchControllers", &controllerspb.WatchControllersRequest{Player: p.Slot(), Watch: watch}, nil)
+}
+
 // WatchProjectiles reports the projectiles with these designer names, such
 // as rocket_launcher_rocket_projectile, in Launch and Impact events. A new
 // call replaces the list; an empty list stops watching.
@@ -1961,7 +2099,8 @@ func WatchProjectiles(options *ProjectileOptions) error {
 // HoldEntityModifier keeps a modifier, named as GiveModifier names it, on a
 // live entity with no expiry, giving it back whenever the game removes it
 // while the entity lives. The hold ends with the entity or when active is
-// false.
+// false. Releasing leaves the entity's current modifier; the mod stopping
+// removes it.
 func HoldEntityModifier(entity uint32, modifier string, active *bool) error {
 	return invoke("HoldEntityModifier", &abilitiespb.HoldEntityModifierRequest{Entity: entity, Modifier: modifier, Active: active}, nil)
 }
@@ -1985,6 +2124,10 @@ type modHandlers interface {
 	// Chat reports each chat line the server accepted from a player the mod
 	// serves, while the mod asked for chat, before the line's command.
 	Chat(event *ChatEvent) error
+	// Ping offers each ping a player the mod serves sends, before the server
+	// shows it to anyone, while the mod asked for pings. The mod's answer may
+	// drop it for every recipient or mute its voice line for some.
+	Ping(event *PingEvent) (*PingResult, error)
 	// World follows each world load, and start when a world has already
 	// loaded. Objects and bots from an earlier world are gone by then.
 	World(event *WorldEvent) error
@@ -2047,15 +2190,29 @@ type modHandlers interface {
 	// human who finished joining, a bot once added, and at start each player
 	// already in the game. It follows the PlayersChanged that lists them.
 	PlayerJoined(event *PlayerJoinedEvent) error
-	// PlayerLeft reports each joined player leaving the mod, once. A player who
-	// disconnects is reported before the engine removes them, so their slot
-	// and hero still read, and before the PlayersChanged that drops them. A
+	// PlayerAway reports a joined human whose client disconnected while the
+	// server holds their seat. The player is not gone: their controller and
+	// hero stay, and they may return to them, so a mod keeps their seat as it
+	// stands. It follows the PlayersChanged that lists them away.
+	PlayerAway(event *PlayerAwayEvent) error
+	// PlayerReturned reports an away player who reconnected to their seat and
+	// finished joining again. It follows the PlayersChanged that lists them
+	// ready.
+	PlayerReturned(event *PlayerReturnedEvent) error
+	// PlayerLeft reports each joined player leaving the mod, once, when their
+	// seat ends: a bot removed, a human kicked or released by the program that
+	// runs the host, or a human away past the game's limit. A human whose
+	// client merely disconnects is away first. The leave arrives before the
+	// engine frees the slot, so the slot and hero still read, and before the
+	// PlayersChanged that drops them. Modlock then clears what the seat left:
+	// its hero is killed and kept down, and its controller leaves its team. A
 	// disconnect the mod causes during its own event, such as removing a bot,
 	// arrives after that event returns.
 	PlayerLeft(event *PlayerLeftEvent) error
-	// PlayersChanged reports the occupied player slots before the first event
-	// after Start, and again before the next event whenever a player joins,
-	// finishes joining or leaves, so a mod lists players without a call.
+	// PlayersChanged reports the player slots with a seat, connected or away,
+	// before the first event after Start, and again before the next event
+	// whenever a player joins, finishes joining, goes away, returns or leaves,
+	// so a mod lists players without a call.
 	PlayersChanged(event *PlayersChangedEvent) error
 }
 
@@ -2086,6 +2243,12 @@ func serveMod(handlers modHandlers, call *wasmpb.Call) *wasmpb.Reply {
 			return &wasmpb.Reply{Error: err.Error()}
 		}
 		return answer(nil, handlers.Chat(event))
+	case "Ping":
+		event := &PingEvent{}
+		if err := event.UnmarshalVT(call.GetRequest()); err != nil {
+			return &wasmpb.Reply{Error: err.Error()}
+		}
+		return answer(handlers.Ping(event))
 	case "World":
 		event := &WorldEvent{}
 		if err := event.UnmarshalVT(call.GetRequest()); err != nil {
@@ -2218,6 +2381,18 @@ func serveMod(handlers modHandlers, call *wasmpb.Call) *wasmpb.Reply {
 			return &wasmpb.Reply{Error: err.Error()}
 		}
 		return answer(nil, handlers.PlayerJoined(event))
+	case "PlayerAway":
+		event := &PlayerAwayEvent{}
+		if err := event.UnmarshalVT(call.GetRequest()); err != nil {
+			return &wasmpb.Reply{Error: err.Error()}
+		}
+		return answer(nil, handlers.PlayerAway(event))
+	case "PlayerReturned":
+		event := &PlayerReturnedEvent{}
+		if err := event.UnmarshalVT(call.GetRequest()); err != nil {
+			return &wasmpb.Reply{Error: err.Error()}
+		}
+		return answer(nil, handlers.PlayerReturned(event))
 	case "PlayerLeft":
 		event := &PlayerLeftEvent{}
 		if err := event.UnmarshalVT(call.GetRequest()); err != nil {

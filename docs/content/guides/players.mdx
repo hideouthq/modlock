@@ -9,9 +9,12 @@ A pawn is the player's hero as it is on this frame.
 
 ## List the players
 
-The player list contains every connection. Each connection has a player, a
-name, a Steam ID, whether it is a bot, and a `generation`, which
-changes when someone new takes the slot.
+The player list contains every seat. Each connection has a player, a name, a
+Steam ID, whether it is a bot, whether it is `away`, and a `generation`, which
+changes when someone new takes the slot. An away player's connection dropped,
+and the game holds their seat until they return or it ends, as
+[joins and leaves](/guides/events#joins-and-leaves) describes; a player who
+returns keeps their generation.
 
 <Samples>
 
@@ -383,6 +386,7 @@ Python spells each call in `snake_case`, and Go capitalizes it.
 | `player.watchMovement(true)`                                                                                                      | Add the hero's movement, landings and wall jumps to each frame.                  |
 | `playCamera(player, options)`, `cameraPulse`, `cameraShake`                                                                       | Play curves on the camera, TypeScript only; see [Camera moves](/guides/camera).  |
 | `setOrbitCamera(player, enabled)`                                                                                                 | Switch the hero to the hideout's zoom camera and HUD, or back.                   |
+| `entityCamera(player, options)`                                                                                                   | Show the player a 6-DOF `point_camera` with full roll, TypeScript and Go only.   |
 | `addBot(options)`, `player.removeBot()`                                                                                           | Add or remove a bot player.                                                      |
 
 ## Heroes

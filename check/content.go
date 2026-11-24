@@ -34,9 +34,18 @@ const ModMapPrefix = "hl_"
 // StockMaps are the Deadlock maps a mod may play without shipping one.
 var StockMaps = []string{"dl_midtown"}
 
-// GameMaps are the maps the game installs in citadel/maps, which a mod's map
-// may not replace under any name.
-var GameMaps = []string{"dl_hideout", "dl_midtown", "hero_testing", "new_player_basics", "start"}
+// GameMaps are the maps the game installs in citadel/maps and core/maps, which
+// a mod's map may not replace under any name.
+var GameMaps = []string{"dl_hideout", "dl_midtown", "error", "hero_testing", "new_player_basics", "start"}
+
+// gameMap reports whether Windows opens a map named name as one of GameMaps.
+// Its file systems compare names by each character's uppercase, so
+// DL_Midtown, and a dotless or long s, open the game's own map.
+func gameMap(name string) bool {
+	return slices.ContainsFunc(GameMaps, func(game string) bool {
+		return strings.ToUpper(name) == strings.ToUpper(game)
+	})
+}
 
 // MapName reports whether name, mod.json's map, is a map every player has: a
 // stock Deadlock map, or an hl_ map the mod ships. No map plays dl_midtown.
@@ -168,9 +177,9 @@ var addonPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*-[0-9A-Za-z][0-9A-
 // ContentName checks that name is a file a content addon may carry: a name
 // files.Name accepts, inside an addon's directory, panorama/<kind>/<addon>/
 // or <asset dir>/<addon>/, or the archive of a map a mod ships,
-// maps/<map>.vpk, under any name but one of GameMaps, as Map lets a shipped
-// map keep the name it was compiled under. It returns the addon the file belongs to, or "" for a
-// map. Content that comes from another host or a publisher meets this before
+// maps/<map>.vpk, under any name but one of GameMaps in any case, as Map
+// lets a shipped map keep the name it was compiled under. It returns the
+// addon the file belongs to, or "" for a map. Content that comes from another host or a publisher meets this before
 // any of it reaches a disk or a mount, so it neither leaves its package nor
 // replaces a file of the game's or of another addon.
 func ContentName(name string) (string, error) {
@@ -178,7 +187,7 @@ func ContentName(name string) (string, error) {
 		return "", err
 	}
 	if rest, ok := strings.CutPrefix(name, MapsDir+"/"); ok {
-		if strings.Contains(rest, "/") || path.Ext(rest) != ".vpk" || slices.Contains(GameMaps, strings.TrimSuffix(rest, ".vpk")) {
+		if strings.Contains(rest, "/") || path.Ext(rest) != ".vpk" || gameMap(strings.TrimSuffix(rest, ".vpk")) {
 			return "", errors.Errorf("%s is not a mod's map; a mod ships its map as %s/<name>.vpk, named for none of the game's maps", name, MapsDir)
 		}
 		return "", nil

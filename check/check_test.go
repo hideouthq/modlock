@@ -128,8 +128,8 @@ func TestProjectMap(t *testing.T) {
 // TestContentName accepts files inside an addon's directory and a mod's map,
 // and refuses every name that could land outside its package on some
 // platform or replace a file of the game's: a climb, a backslash or a drive,
-// an absolute path, a stock path, and a stock map. A map the mod ships keeps
-// its name, as Map lets it.
+// an absolute path, a stock path, and a stock map under any name Windows
+// opens as the stock one. A map the mod ships keeps its name, as Map lets it.
 func TestContentName(t *testing.T) {
 	for name, addon := range map[string]string{
 		"panorama/layout/arena-0123abcd/hud.vxml_c": "arena-0123abcd",
@@ -137,6 +137,7 @@ func TestContentName(t *testing.T) {
 		"materials/arena-0.1.0/a/b.vmat_c":          "arena-0.1.0",
 		"maps/hl_arena.vpk":                         "",
 		"maps/winter_arena.vpk":                     "",
+		"maps/Winter_Arena.vpk":                     "",
 	} {
 		if got, err := ContentName(name); err != nil || got != addon {
 			t.Errorf("%s: got %q, %v, want %q", name, got, err, addon)
@@ -155,6 +156,12 @@ func TestContentName(t *testing.T) {
 		"models/heroes/abrams.vmdl_c",
 		"maps/dl_midtown.vpk",
 		"maps/dl_hideout.vpk",
+		"maps/DL_MIDTOWN.vpk",
+		"maps/Dl_Hideout.vpk",
+		"maps/New_Player_Basics.vpk",
+		"maps/\u017ftart.vpk",
+		"maps/hero_test\u0131ng.vpk",
+		"maps/error.vpk",
 		"maps/hl_arena/x.vpk",
 		"maps/hl_arena.bsp",
 		"pak01_dir.vpk",

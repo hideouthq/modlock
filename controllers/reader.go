@@ -30,8 +30,26 @@ const Heartbeat = 50 * time.Millisecond
 // 64 Hz server tick. Presses and releases in between wait for the next one.
 const MinInterval = time.Second / 128
 
-// loadOnce loads SDL3 the first time a Reader opens.
-var loadOnce = sync.OnceValues(loadSDL)
+// loaded holds SDL3 once a load succeeds. A failed load, such as a download
+// on a PC that is offline, is tried again by the next Open.
+var loaded struct {
+	sync.Mutex
+	lib *sdlLib
+}
+
+// load returns SDL3, loading it if no earlier load succeeded.
+func load() (*sdlLib, error) {
+	loaded.Lock()
+	defer loaded.Unlock()
+	if loaded.lib == nil {
+		lib, err := loadSDL()
+		if err != nil {
+			return nil, err
+		}
+		loaded.lib = lib
+	}
+	return loaded.lib, nil
+}
 
 // Reader streams the controllers attached to this PC. SDL's state is
 // process-wide, so one Run goes at a time.
@@ -46,10 +64,27 @@ type Reader struct {
 	running sync.Mutex
 }
 
-// Open loads SDL3, or returns ErrUnavailable when it is not installed. A
-// nil log uses slog's default.
+// LoadSDL loads the SDL3 library at path for every later Open, for an
+// application that ships its own copy somewhere the reader does not look,
+// such as a directory it unpacks into. It does nothing once a load has
+// succeeded.
+func LoadSDL(path string) error {
+	loaded.Lock()
+	defer loaded.Unlock()
+	if loaded.lib == nil {
+		lib, err := openSDL(path)
+		if err != nil {
+			return err
+		}
+		loaded.lib = lib
+	}
+	return nil
+}
+
+// Open loads SDL3, or returns ErrUnavailable when it cannot be loaded; a
+// later Open tries again. A nil log uses slog's default.
 func Open(log *slog.Logger) (*Reader, error) {
-	lib, err := loadOnce()
+	lib, err := load()
 	if err != nil {
 		return nil, err
 	}

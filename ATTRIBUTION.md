@@ -38,6 +38,17 @@ The camera path evaluation in `src/camera/camera_path.cc` and
 and `native/include/dolly_flight.hpp`), MIT License, Copyright (c) 2026
 Deadlock Dolly contributors. The notice is kept in those files.
 
+## ValveResourceFormat
+
+Studio's environment-layer renderer in `studio/web/environment.ts` follows
+[ValveResourceFormat](https://github.com/ValveResourceFormat/ValveResourceFormat)'s
+Citadel environment shaders: the TEXCOORD4 blend paint, COLOR tint, packed
+texture channels and reveal-mask thresholds. The reference files are
+`Renderer/Shaders/citadel/environment_vertex.slang`,
+`Renderer/Shaders/citadel/environment_blend.frag.slang` and
+`Renderer/Shaders/common/surface_environment_layers.slang`. They are MIT licensed,
+Copyright (c) 2015 ValveResourceFormat Contributors; the notice is in [LICENSE](LICENSE).
+
 ## Third-party libraries
 
 | Library                                                                  | Location                                                                                                                                 | License                                                           |
@@ -52,5 +63,5 @@ Deadlock Dolly contributors. The notice is kept in those files.
 | [Wasmtime](https://github.com/bytecodealliance/wasmtime)                 | Linked into `modlock-host`; its `wizer` command snapshots `python.wasm` at build time                                                    | Apache License 2.0 with LLVM exceptions                           |
 | [protobuf-es-lite](https://github.com/aperturerobotics/protobuf-es-lite) | Bundled into the TypeScript library, the interface renderer and every script mod                                                         | Apache License 2.0                                                |
 | [esbuild](https://github.com/evanw/esbuild)                              | Linked into the `modlock` command                                                                                                        | MIT                                                               |
-| [SDL](https://github.com/libsdl-org/SDL)                                 | Embedded in the Windows `modlock` command as `SDL3.dll`, and loaded from the system elsewhere, to read controllers                       | zlib                                                              |
+| [SDL](https://github.com/libsdl-org/SDL)                                 | Downloaded by the Windows `modlock` command from SDL's release, checked against a pinned SHA-256, and loaded from the system elsewhere, to read controllers                       | zlib                                                              |
 | [purego](https://github.com/ebitengine/purego)                           | Linked into the `modlock` command, to call SDL without cgo                                                                               | Apache License 2.0                                                |

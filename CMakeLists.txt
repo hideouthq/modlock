@@ -201,23 +201,33 @@ add_library(modlock_sdk SHARED
   src/wasm/definition_changes.cc
   src/wasm/ability_upgrades.cc
   src/wasm/game.cc
-  src/wasm/game_combat.cc
-  src/wasm/game_effects.cc
-  src/wasm/game_voice.cc
-  src/wasm/game_entities.cc
-  src/wasm/game_fields.cc
-  src/wasm/game_seating.cc
-  src/wasm/game_heroes.cc
-  src/wasm/game_builds.cc
+  src/wasm/game_services_voice.cc
+  src/wasm/hero_builds.cc
   ${CMAKE_CURRENT_BINARY_DIR}/src/wasm/hero_builds_data.cc
-  src/wasm/game_match.cc
+  src/wasm/match.cc
+  src/wasm/entity_fields.cc
+  src/wasm/modifier_masks.cc
+  src/wasm/roster.cc
+  src/wasm/world.cc
+  src/wasm/apart_players.cc
+  src/wasm/fields.cc
+  src/wasm/modifier_holds.cc
+  src/wasm/heroes.cc
+  src/wasm/camera.cc
+  src/wasm/hero_movement.cc
+  src/wasm/input.cc
+  src/wasm/projectiles.cc
+  src/wasm/restores.cc
+  src/wasm/seating.cc
+  src/wasm/voice.cc
+  src/wasm/effects.cc
+  src/wasm/effects_combat.cc
   src/wasm/call_profile.cc
   src/wasm/service_calls.cc
   src/wasm/console_lines.cc
   src/wasm/entity_rules.cc
   src/wasm/game_services.cc
   src/wasm/game_services_input.cc
-  src/wasm/game_watches.cc
   src/wasm/hero_restore.cc
   src/wasm/attendance.cc
   src/wasm/controller_table.cc

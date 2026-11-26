@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <expected>
 #include <functional>
@@ -16,8 +17,6 @@
 #include <vector>
 
 #include "modlock/engine_host.h"
-#include "modlock/gameinterop/ability_charge_limit.h"
-#include "modlock/gameinterop/ability_cooldown.h"
 #include "modlock/gameinterop/ability_input_hook.h"
 #include "modlock/gameinterop/ability_modifier.h"
 #include "modlock/gameinterop/ability_slots.h"
@@ -44,14 +43,29 @@
 #include "modlock/render/world_effect_game_factory.h"
 #include "modlock/render/world_text_game_factory.h"
 #include "src/wasm/wasm.pb.h"
+#include "wasm/apart_players.h"
+#include "wasm/camera.h"
 #include "wasm/controller_table.h"
-#include "wasm/hero_picks.h"
+#include "wasm/effects.h"
+#include "wasm/fields.h"
+#include "wasm/hero_movement.h"
 #include "wasm/hero_restore.h"
+#include "wasm/heroes.h"
+#include "wasm/hook_sources.h"
 #include "wasm/host_service.gen.h"
+#include "wasm/input.h"
 #include "wasm/input_changes.h"
+#include "wasm/match.h"
+#include "wasm/modifier_holds.h"
+#include "wasm/module.h"
 #include "wasm/npc_restore.h"
+#include "wasm/projectiles.h"
+#include "wasm/restores.h"
+#include "wasm/roster.h"
+#include "wasm/seating.h"
 #include "wasm/team_seating.h"
-#include "wasm/visibility.h"
+#include "wasm/voice.h"
+#include "wasm/world.h"
 
 namespace modlock::wasm {
 
@@ -92,15 +106,32 @@ class GameServices {
   // mod's step may run at a time.
   std::expected<void, std::string> StepWith(gameinterop::MovementHook::Handler step);
 
+  // Pause, Clock and Rift return the game's pause, match clock and rift
+  // rules.
+  std::expected<const gameinterop::GamePause*, std::string> Pause();
+  std::expected<gameinterop::MatchClock*, std::string> Clock();
+  std::expected<gameinterop::KothRules*, std::string> Rift();
+
   // Controllers holds the controllers players' clients stream for the mods
   // that watch them.
   ControllerTable& Controllers() { return controllers_; }
 
- private:
-  friend class Game;
+  // The source sets the host-wide hooks read. A mod's game adds itself to
+  // each while it runs, and removes itself before it goes.
+  Sources<InputChanges>& InputSources() { return inputs_; }
 
-  // FieldKey names one schema field as class and field.
-  using FieldKey = std::pair<std::string, std::string>;
+  Sources<MoverSource>& MoverSources() { return movers_; }
+
+  Sources<CameraSource>& CameraSources() { return cameras_; }
+
+  Sources<TransmitSource>& TransmitSources() { return transmitters_; }
+
+  Sources<ProjectileSource>& ProjectileSources() { return projectile_sources_; }
+
+  Sources<VoiceSource>& VoiceSources() { return voices_; }
+
+  // The services below resolve on first use, as the class comment describes;
+  // each module asks for the ones its calls need.
 
   // ModifierLayout locates an entity's modifier list and state masks.
   struct ModifierLayout {
@@ -111,16 +142,10 @@ class GameServices {
     size_t mask_size = 0;
   };
 
-  // Cache fills cache from resolve the first time a caller asks and keeps it.
-  // resolve takes the server image, and the schema system when it asks for
-  // one. A failure leaves the cache empty, so the next caller retries.
-  template <typename Value, typename Resolve>
-  std::expected<void, std::string> Cache(Value& cache, Resolve resolve);
-
   std::expected<const gameinterop::ModuleImage*, std::string> Image();
   std::expected<void*, std::string> Schema();
   std::expected<const gameinterop::HeroDefinitions*, std::string> Heroes();
-  std::expected<const gameinterop::WorldEntities::Calls*, std::string> WorldCalls();
+  std::expected<const gameinterop::WorldEntities::Calls*, std::string> EntityCalls();
   std::expected<const gameinterop::PlayerSelectionCalls*, std::string> Selection();
   std::expected<const gameinterop::AbilityDefinitions*, std::string> Abilities();
   std::expected<const gameinterop::AbilityModifier::Calls*, std::string> ModifierCalls();
@@ -139,14 +164,30 @@ class GameServices {
   std::expected<const gameinterop::EntityDynamics*, std::string> Dynamics();
   std::expected<const gameinterop::BotCreation*, std::string> Bots();
   std::expected<gameinterop::FreeForAllRelations*, std::string> Relations();
+  // DisableRelations restores the stock team relations, if Relations
+  // installed them.
+  void DisableRelations();
   std::expected<render::WorldTextGameFactory*, std::string> Text();
   std::expected<render::WorldEffectGameFactory*, std::string> Effects();
+
+  // SweepEffects lets the effect factory release the effects that ended by
+  // now, and InvalidateEffects forgets those the engine freed with the world.
+  // Neither builds the factory.
+  void SweepEffects(std::chrono::steady_clock::time_point now) {
+    if (effects_) {
+      effects_->Sweep(now);
+    }
+  }
+
+  void InvalidateEffects() {
+    if (effects_) {
+      effects_->InvalidateAfterEngineReset();
+    }
+  }
+
   std::expected<const gameinterop::NativeDamage*, std::string> Damage();
   std::expected<gameinterop::ModifyCurrency, std::string> Currency();
   std::expected<gameinterop::RequiredSouls, std::string> RequiredSouls();
-  std::expected<const gameinterop::GamePause*, std::string> Pause();
-  std::expected<gameinterop::MatchClock*, std::string> Clock();
-  std::expected<gameinterop::KothRules*, std::string> Rift();
   // Rules returns the game rules object, which the rules proxy entity points
   // to.
   std::expected<void*, std::string> Rules();
@@ -162,9 +203,6 @@ class GameServices {
   // it wanted until then.
   void Input();
 
-  // Filter applies every mod's presses, remaps and blocks to one player's input.
-  uint64_t Filter(gameinterop::AbilityInputHook::Input& input);
-
   // Silenced resolves the named voice concepts, caching each value. It
   // returns those it knows and, in error, the names it does not.
   std::pair<std::set<int32_t>, std::string> Silenced(
@@ -173,18 +211,9 @@ class GameServices {
   // Voice installs the shared voice hook on first use.
   std::expected<void, std::string> Voice();
 
-  // Speaks reports whether no mod silences concept_value for speaker.
-  bool Speaks(void* speaker, int32_t concept_value);
-
   // Projectiles installs the shared projectile impact hook once a world has
   // loaded, or marks it wanted until then.
   void Projectiles();
-
-  // Impact runs the game's impact of a projectile and reports it to each mod
-  // that watches it. When one keeps momentum, every live hero gets back the
-  // motion it had before the game's explosion.
-  void Impact(void* entity, const gameinterop::TraceResult& contact,
-              const gameinterop::ProjectileImpactHook::NativeImpact& native);
 
   // Transmit installs the shared transmit hook on first use.
   std::expected<void, std::string> Transmit();
@@ -195,6 +224,37 @@ class GameServices {
   // CameraPosition is the camera position of the player in slot, as the
   // command hook last read it; the first call installs the hook.
   std::optional<std::array<float, 3>> CameraPosition(int32_t slot);
+
+  // Steps installs or removes the server movement hook to match what the
+  // mods need of it.
+  std::expected<void, std::string> Steps();
+
+  // Command takes the commands pawn ran since the previous call, folded.
+  std::optional<movement::MovementCommand> Command(const void* pawn);
+
+ private:
+  friend class Game;
+
+  // FieldKey names one schema field as class and field.
+  using FieldKey = std::pair<std::string, std::string>;
+
+  // Cache fills cache from resolve the first time a caller asks and keeps it.
+  // resolve takes the server image, and the schema system when it asks for
+  // one. A failure leaves the cache empty, so the next caller retries.
+  template <typename Value, typename Resolve>
+  std::expected<void, std::string> Cache(Value& cache, Resolve resolve);
+
+  // Filter applies every mod's presses, remaps and blocks to one player's input.
+  uint64_t Filter(gameinterop::AbilityInputHook::Input& input);
+
+  // Speaks reports whether no mod silences concept_value for speaker.
+  bool Speaks(void* speaker, int32_t concept_value);
+
+  // Impact runs the game's impact of a projectile and reports it to each mod
+  // that watches it. When one keeps momentum, every live hero gets back the
+  // motion it had before the game's explosion.
+  void Impact(void* entity, const gameinterop::TraceResult& contact,
+              const gameinterop::ProjectileImpactHook::NativeImpact& native);
 
   // Driven returns the command the first mod that drives slot gives it, and
   // spends that command's presses.
@@ -218,28 +278,14 @@ class GameServices {
   // every entity a mod shows only to others.
   void Withhold(gameinterop::TransmitSet& set);
 
-  // WithholdApart keeps from one player the heroes game's apart players and
-  // the others may not see of each other.
-  void WithholdApart(const Game& game, gameinterop::TransmitSet& set) const;
-
-  // WatchesInside reports whether the player in slot watches, through any
-  // mod's Watch, a hero among the apart slot bits.
-  bool WatchesInside(int32_t slot, uint64_t apart) const;
-
-  // Steps installs or removes the server movement hook to match what the
-  // mods need of it.
-  std::expected<void, std::string> Steps();
-
   // Step records the hero's command, replays a mod's steer over it, and runs
   // step_ otherwise; it reports whether it replaced the step's motion.
   bool Step(gameinterop::MovementCall& call);
 
   // Face points a bot's step and hero along angles in place of the view its
   // own command set: the step's view, the hero's aim, and the body's yaw.
-  void Face(Game& game, gameinterop::MovementCall& call, const std::array<float, 3>& angles);
-
-  // Command takes the commands pawn ran since the previous call, folded.
-  std::optional<movement::MovementCommand> Command(const void* pawn);
+  void Face(MoverSource& mover, gameinterop::MovementCall& call,
+            const std::array<float, 3>& angles);
 
   std::optional<gameinterop::MappedModuleImage> image_;
   std::optional<gameinterop::EngineServer> server_;
@@ -261,7 +307,7 @@ class GameServices {
   std::optional<gameinterop::AbilitySlots> slots_;
   gameinterop::CreateAbility create_ability_ = nullptr;
   gameinterop::RespawnPawn respawn_ = nullptr;
-  gameinterop::ChangeTeamKeepingHero change_team_ = nullptr;
+  gameinterop::ChangeTeamKeepingHero change_team_;
   gameinterop::ResetHeroPawn reset_hero_ = nullptr;
   gameinterop::TeleportClientCamera teleport_ = nullptr;
   gameinterop::WarpOntoZipline zipline_ = nullptr;
@@ -285,8 +331,13 @@ class GameServices {
   std::map<std::pair<const void*, std::string>, bool> derives_;
   std::optional<ModifierLayout> modifiers_;
   std::map<std::string, int64_t, std::less<>> modifier_states_;
-  // games are the live mods' surfaces, which the input hook consults.
-  std::set<Game*> games_;
+  // The running mods' sources, one set per hook that reads them.
+  Sources<InputChanges> inputs_;
+  Sources<MoverSource> movers_;
+  Sources<CameraSource> cameras_;
+  Sources<TransmitSource> transmitters_;
+  Sources<ProjectileSource> projectile_sources_;
+  Sources<VoiceSource> voices_;
   std::optional<gameinterop::AbilityInputHook> input_;
   bool input_wanted_ = false;
   // held_ is each player's held buttons before blocking, for blocked edges.
@@ -337,15 +388,20 @@ class GameServices {
 // Game answers one mod's calls into the game and owns what the mod placed in
 // it: world objects, units, bots, frozen heroes and input changes. Clear and
 // WorldEnding remove them, so a stopped or reloaded mod leaves nothing behind.
-// The calls that reach beyond the game, Log, Ui and CallService, belong to a
-// subclass.
-class Game : public HostService {
+// Its modules answer the mod's Host calls through Calls; the calls that reach
+// beyond the game, such as Log, Ui and CallService, belong to a subclass.
+class Game {
  public:
   Game(GameServices& services, EngineHost* engine);
-  ~Game() override;
+  virtual ~Game();
 
   Game(const Game&) = delete;
   Game& operator=(const Game&) = delete;
+
+  // Calls returns the modules that answer each part of the mod's Host calls.
+  // The plugin part, the calls that reach beyond the game, is left to a
+  // subclass.
+  HostCalls Calls();
 
   // Frame finishes placing the units the mod spawned last frame and advances
   // its hero restores.
@@ -355,21 +411,14 @@ class Game : public HostService {
 
   // TakeButtonChanges returns the watched button changes since the last call,
   // in the order players made them.
-  std::vector<ButtonChange> TakeButtonChanges();
-
-  // Restored is the result of one player's hero restore; an empty error
-  // means the target held.
-  struct Restored {
-    int32_t slot = 0;
-    std::string error;
-  };
+  std::vector<ButtonChange> TakeButtonChanges() { return input_.TakeButtonChanges(); }
 
   // TakeRestored returns the hero restores that ended since the last call.
-  std::vector<Restored> TakeRestored();
+  std::vector<Restores::Restored> TakeRestored() { return restores_.TakeRestored(); }
 
   // TakeNpcsRestored returns the result of the unit restore that ended since
   // the last call: an empty string when the units hold their targets.
-  std::optional<std::string> TakeNpcsRestored();
+  std::optional<std::string> TakeNpcsRestored() { return restores_.TakeNpcsRestored(); }
 
   // WorldEnding removes the mod's objects, units and bots and ends its
   // restores and match clock hold before the world goes. The mod's input
@@ -392,638 +441,121 @@ class Game : public HostService {
 
   // Cast describes one executed ability for the mod: the caster's player,
   // and the ability's name and slot when a player's hero cast it.
-  abilities::AbilityCastEvent Cast(uint32_t caster, uint32_t ability, uint32_t target);
-
-  // SlotOfPawn returns the slot of the player whose hero the entity handle
-  // names, or no value for any other entity.
-  std::optional<int32_t> SlotOfPawn(uint32_t handle) const { return observer_.SlotOfPawn(handle); }
+  abilities::AbilityCastEvent Cast(uint32_t caster, uint32_t ability, uint32_t target) {
+    return heroes_.Cast(caster, ability, target);
+  }
 
   // Apart hides the heroes of the players in the slot bits from every other
   // player, and every other player's hero from them, until the next call; zero
   // shows every hero to everyone again. It survives Clear and world changes,
   // since it follows the mod's scope rather than what the mod placed.
-  std::expected<void, std::string> Apart(uint64_t slots);
+  std::expected<void, std::string> Apart(uint64_t slots) { return apart_.Set(slots); }
 
   // Departing reports whether a bot the mod removed still holds its slot.
   // The engine finishes the disconnect of a client it is processing after
   // the call returns, so the slot can stay held for a moment.
-  bool Departing();
+  bool Departing() { return world_.Departing(); }
 
-  // Hero is one live hero this frame. Velocity is absent when the game's
-  // motion field cannot be read.
-  struct Hero {
-    int32_t slot = 0;
-    uint32_t handle = 0;
-    void* pawn = nullptr;
-    std::array<float, 3> feet{};
-    std::optional<std::array<float, 3>> velocity;
-  };
+  // SlotOfPawn returns the slot of the player whose hero the entity handle
+  // names, or no value for any other entity.
+  std::optional<int32_t> SlotOfPawn(uint32_t handle) const { return players_.SlotOfPawn(handle); }
 
   // Heroes returns every live hero this frame.
-  std::vector<Hero> Heroes();
+  std::vector<wasm::Roster::Hero> Heroes() { return players_.Heroes(); }
 
   // AssignTeams applies host seats on join and assignment change. The table
   // survives Clear, so a build reload keeps confirmed seats and pending joins.
-  std::expected<void, std::string> AssignTeams(const wasm::TeamAssignments& request);
+  std::expected<void, std::string> AssignTeams(const wasm::TeamAssignments& request) {
+    return seating_.AssignTeams(request);
+  }
 
   // StartFreeForAll sets whether free-for-all is on as a mod starts, from its
   // manifest, and turns team seating off. SetFreeForAll and SetTeamSeating
   // change them while the mod runs.
-  void StartFreeForAll(bool enabled);
+  void StartFreeForAll(bool enabled) { seating_.StartFreeForAll(enabled); }
 
   // StartContentAddon names the content addon of the mod that starts, which
   // CreateEntity writes in place of {addon} in a text key value, and
   // CreateModel and CreateParticle in a resource path, so a world panel names
   // its layout as file://{resources}/layout/{addon}/panel.xml and a model its
   // resource as models/{addon}/pawn.vmdl.
-  void StartContentAddon(std::string addon) { addon_ = std::move(addon); }
+  void StartContentAddon(std::string addon) { world_.StartContentAddon(std::move(addon)); }
 
   // WithAddon returns text with the mod's content addon in place of each
   // {addon}.
-  std::string WithAddon(std::string text) const;
+  std::string WithAddon(std::string text) const { return world_.WithAddon(std::move(text)); }
 
   // FreeForAllCommand reports whether free-for-all consumes a player's console
   // line. Seating is the host's, so it drops the team commands.
-  bool FreeForAllCommand(std::string_view line) const;
+  bool FreeForAllCommand(std::string_view line) const { return seating_.FreeForAllCommand(line); }
 
   // ClientCommand notes a console command a player sent the game that the
   // host follows: a selecthero pick from the game's Change Hero, which
   // SelectHero leaves to land.
-  void ClientCommand(int32_t slot, std::string_view line);
+  void ClientCommand(int32_t slot, std::string_view line) { heroes_.ClientCommand(slot, line); }
 
   // Moving reports whether the mod watches any player's movement.
-  bool Moving() const { return !movers_.empty(); }
-
-  // MovementFact is one movement fact the game announced for the hero with
-  // the pawn handle; an executed ability carries the ability's handle, and
-  // a completed interaction, with no action, the interaction.
-  struct MovementFact {
-    uint32_t pawn = 0;
-    movement::MovementAction action = movement::MOVEMENT_ACTION_UNKNOWN;
-    uint32_t ability = 0;
-    std::optional<movement::Interaction> interaction;
-  };
+  bool Moving() const { return movement_.Moving(); }
 
   // Movement returns a sample of each watched, live hero, with the facts
   // that name its pawn.
-  std::vector<movement::MovementSample> Movement(std::span<const MovementFact> facts);
+  std::vector<movement::MovementSample> Movement(
+      std::span<const wasm::HeroMovement::MovementFact> facts) {
+    return movement_.Samples(facts);
+  }
 
   // Controllers appends each player whose controllers the mod watches, with
   // the presses and releases since its last call.
-  void Controllers(google::protobuf::RepeatedPtrField<controllers::PlayerControllers>* out);
+  void Controllers(google::protobuf::RepeatedPtrField<controllers::PlayerControllers>* out) {
+    input_.Controllers(out);
+  }
 
   // TakeLaunches returns the watched projectiles that appeared since the last
   // call.
-  std::vector<combat::LaunchEvent> TakeLaunches() { return std::exchange(launches_, {}); }
+  std::vector<combat::LaunchEvent> TakeLaunches() { return projectiles_.TakeLaunches(); }
 
  protected:
   // Serves reports whether this game currently controls the player's slot.
   virtual bool Serves(int32_t) const { return true; }
 
-  // Players lists the player slots with a seat, connected or away; a host may
-  // add what it knows of each player.
-  std::expected<players::PlayersResponse, std::string> Players() override;
+  // Describe adds what a host knows of each player to the list the Players
+  // call returns.
+  virtual void Describe(players::PlayersResponse&) {}
 
   // Impacted delivers a watched projectile's impact to the mod, inside the
   // game's impact.
   virtual void Impacted(const combat::ImpactEvent& event) = 0;
 
  private:
-  friend class GameServices;
-
-  // Object is one world object the mod created.
-  using Object =
-      std::variant<std::unique_ptr<render::WorldEffect>, std::unique_ptr<render::WorldTextEntity>>;
-
-  // The calls, in the order the Host service declares them.
-  std::expected<void, std::string> ServerCommand(const ServerCommandRequest& request) override;
-  std::expected<DefinitionFieldResponse, std::string> ReadDefinitionField(
-      const DefinitionFieldOptions& request) override;
-  std::expected<void, std::string> Chat(const effects::ChatRequest& request) override;
-  std::expected<void, std::string> CenterText(const effects::CenterTextRequest& request) override;
-  std::expected<void, std::string> Announce(const effects::AnnounceRequest& request) override;
-  std::expected<void, std::string> Precache(const PrecacheOptions& request) override;
-  std::expected<players::PawnResponse, std::string> Pawn(
-      const players::PlayerRequest& request) override;
-  std::expected<players::PawnsResponse, std::string> Pawns() override;
-  std::expected<players::HeroResponse, std::string> SelectHero(
-      const players::SelectHeroRequest& request) override;
-  std::expected<void, std::string> Spectate(const players::PlayerRequest& request) override;
-  std::expected<void, std::string> Watch(const players::WatchRequest& request) override;
-  std::expected<void, std::string> FreeCamera(const players::FreeCameraRequest& request) override;
-  std::expected<void, std::string> MoveCamera(const players::CameraOptions& request) override;
-  std::expected<void, std::string> ClearCamera(const players::ClearCameraRequest& request) override;
-  std::expected<void, std::string> Unwatch(const players::PlayerRequest& request) override;
-  std::expected<void, std::string> Respawn(const players::PlayerRequest& request) override;
-  std::expected<void, std::string> ChangeTeam(const players::ChangeTeamRequest& request) override;
-  std::expected<void, std::string> ClearItems(const players::PlayerRequest& request) override;
-  std::expected<void, std::string> Freeze(const players::FreezeRequest& request) override;
-  std::expected<void, std::string> RestoreStamina(const players::PlayerRequest& request) override;
-  std::expected<void, std::string> SetStamina(const players::SetStaminaRequest& request) override;
-  std::expected<void, std::string> RefreshAbility(
-      const abilities::RefreshAbilityRequest& request) override;
-  std::expected<abilities::AbilitiesResponse, std::string> Abilities(
-      const players::PlayerRequest& request) override;
-  std::expected<void, std::string> SetAbility(const abilities::AbilityOptions& request) override;
-  std::expected<void, std::string> GiveItem(const abilities::GiveItemRequest& request) override;
-  std::expected<void, std::string> TrainAbility(
-      const abilities::TrainAbilityRequest& request) override;
-  std::expected<void, std::string> BuyItem(const abilities::BuyItemRequest& request) override;
-  std::expected<abilities::HeroBuildResponse, std::string> HeroBuild(
-      const abilities::HeroBuildRequest& request) override;
-  std::expected<void, std::string> ReplaceAbility(
-      const abilities::ReplaceAbilityRequest& request) override;
-  std::expected<void, std::string> HoldModifier(
-      const abilities::HoldModifierRequest& request) override;
-  std::expected<void, std::string> GiveModifier(
-      const abilities::GiveModifierRequest& request) override;
-  std::expected<void, std::string> HoldEntityModifier(
-      const abilities::HoldEntityModifierRequest& request) override;
-  std::expected<void, std::string> GiveEntityModifier(
-      const abilities::GiveEntityModifierRequest& request) override;
-  std::expected<void, std::string> Teleport(const movement::TeleportRequest& request) override;
-  std::expected<void, std::string> Zipline(const movement::ZiplineRequest& request) override;
-  std::expected<void, std::string> MovePlayer(const movement::MovePlayerRequest& request) override;
-  std::expected<void, std::string> Steer(const movement::SteerRequest& request) override;
-  std::expected<void, std::string> Drive(const movement::DriveRequest& request) override;
-  std::expected<void, std::string> AdjustSouls(const players::AdjustSoulsRequest& request) override;
-  std::expected<void, std::string> AdjustAbilityPoints(
-      const players::AdjustAbilityPointsRequest& request) override;
-  std::expected<void, std::string> StartingSouls(
-      const players::StartingSoulsRequest& request) override;
-  std::expected<void, std::string> ResetHero(const players::ResetHeroRequest& request) override;
-  std::expected<void, std::string> Heal(const players::HealRequest& request) override;
-  std::expected<effects::SoundResponse, std::string> Sound(
-      const effects::SoundRequest& request) override;
-  std::expected<void, std::string> RestoreHero(const players::RestoreHeroRequest& request) override;
-  std::expected<void, std::string> ScreenEffect(
-      const effects::ScreenEffectRequest& request) override;
-  std::expected<void, std::string> ClearScreenEffect(
-      const effects::ClearScreenEffectRequest& request) override;
-  std::expected<void, std::string> SilenceVoice(
-      const effects::SilenceVoiceRequest& request) override;
-  std::expected<void, std::string> SilencePlayerVoice(
-      const effects::SilencePlayerVoiceRequest& request) override;
-  std::expected<fields::FieldResponse, std::string> ReadField(
-      const fields::ReadFieldRequest& request) override;
-  std::expected<void, std::string> WriteField(const fields::WriteFieldRequest& request) override;
-  std::expected<fields::FieldListResponse, std::string> ReadFieldList(
-      const fields::ReadFieldRequest& request) override;
-  std::expected<fields::FieldResponse, std::string> ReadModifierField(
-      const fields::ReadModifierFieldRequest& request) override;
-  std::expected<abilities::ModifiersResponse, std::string> Modifiers(
-      const entities::EntityRequest& request) override;
-  std::expected<void, std::string> WriteFieldList(
-      const fields::WriteFieldListRequest& request) override;
-  std::expected<entities::EntityClassResponse, std::string> EntityClass(
-      const entities::EntityRequest& request) override;
-  std::expected<entities::EntityNameResponse, std::string> EntityName(
-      const entities::EntityRequest& request) override;
-  std::expected<entities::EntityPositionResponse, std::string> EntityPosition(
-      const entities::EntityRequest& request) override;
-  std::expected<abilities::ActiveResponse, std::string> ModifierState(
-      const abilities::ModifierStateRequest& request) override;
-  std::expected<void, std::string> HoldModifierState(
-      const abilities::HoldModifierStateRequest& request) override;
-  std::expected<void, std::string> SetFreeForAll(
-      const wasm::SetFreeForAllRequest& request) override;
-  std::expected<void, std::string> SetTeamSeating(
-      const wasm::SetTeamSeatingRequest& request) override;
-  std::expected<objects::ObjectResponse, std::string> CreateModel(
-      const objects::ModelOptions& request) override;
-  std::expected<objects::ObjectResponse, std::string> CreateText(
-      const objects::TextOptions& request) override;
-  std::expected<objects::ObjectResponse, std::string> CreateParticle(
-      const objects::ParticleOptions& request) override;
-  std::expected<objects::ObjectResponse, std::string> CreateFog(
-      const objects::FogOptions& request) override;
-  std::expected<void, std::string> MoveObject(const objects::MoveObjectRequest& request) override;
-  std::expected<void, std::string> SetText(const objects::SetTextRequest& request) override;
-  std::expected<void, std::string> SetObjectHidden(
-      const objects::SetObjectHiddenRequest& request) override;
-  std::expected<void, std::string> ShowObjectOnlyTo(
-      const objects::ShowObjectOnlyToRequest& request) override;
-  std::expected<void, std::string> ShowObjectToAll(const objects::ObjectRequest& request) override;
-  std::expected<void, std::string> RemoveObject(const objects::ObjectRequest& request) override;
-  std::expected<entities::EntityResponse, std::string> ObjectEntity(
-      const objects::ObjectRequest& request) override;
-  std::expected<players::BotResponse, std::string> AddBot(
-      const players::BotOptions& request) override;
-  std::expected<void, std::string> RemoveBot(const players::PlayerRequest& request) override;
-  std::expected<void, std::string> BlockInput(const wasm::InputRequest& request) override;
-  std::expected<void, std::string> BlockPlayerInput(
-      const wasm::PlayerInputRequest& request) override;
-  std::expected<void, std::string> Press(const wasm::PlayerInputRequest& request) override;
-  std::expected<void, std::string> CancelPress(const wasm::PlayerInputRequest& request) override;
-  std::expected<void, std::string> WatchInput(const wasm::InputRequest& request) override;
-  std::expected<void, std::string> RemapInput(const wasm::RemapInputRequest& request) override;
-  std::expected<entities::EntityResponse, std::string> CreateEntity(
-      const entities::EntityOptions& request) override;
-  std::expected<entities::AliveResponse, std::string> FireInput(
-      const entities::FireInputRequest& request) override;
-  std::expected<entities::AliveResponse, std::string> RemoveEntity(
-      const entities::EntityRequest& request) override;
-  std::expected<void, std::string> ShowEntityOnlyTo(
-      const entities::ShowEntityOnlyToRequest& request) override;
-  std::expected<void, std::string> ShowEntityToAll(const entities::EntityRequest& request) override;
-  std::expected<npcs::NpcResponse, std::string> SpawnNpc(const npcs::NpcOptions& request) override;
-  std::expected<npcs::NpcStateResponse, std::string> ReadNpc(
-      const npcs::NpcRequest& request) override;
-  std::expected<entities::AliveResponse, std::string> MoveNpc(
-      const npcs::MoveNpcRequest& request) override;
-  std::expected<entities::AliveResponse, std::string> SetNpcHealth(
-      const npcs::SetNpcHealthRequest& request) override;
-  std::expected<entities::AliveResponse, std::string> RemoveNpc(
-      const npcs::NpcRequest& request) override;
-  std::expected<entities::PickupResponse, std::string> CreatePickup(
-      const entities::CreatePickupRequest& request) override;
-  std::expected<entities::AliveResponse, std::string> PickupPresent(
-      const entities::PickupRequest& request) override;
-  std::expected<entities::AliveResponse, std::string> RemovePickup(
-      const entities::PickupRequest& request) override;
-  std::expected<entities::EntitiesResponse, std::string> FindEntities(
-      const entities::FindEntitiesRequest& request) override;
-  std::expected<entities::EntitiesResponse, std::string> FindEntitiesByName(
-      const entities::FindEntitiesByNameRequest& request) override;
-  std::expected<entities::CountResponse, std::string> RemoveEntities(
-      const entities::RemoveEntitiesRequest& request) override;
-  std::expected<void, std::string> ClearMap() override;
-  std::expected<void, std::string> Damage(const combat::HitOptions& request) override;
-  std::expected<void, std::string> KillEntity(const combat::KillOptions& request) override;
-  std::expected<combat::TraceResponse, std::string> Trace(
-      const combat::TraceOptions& request) override;
-  std::expected<void, std::string> RestoreNpcs(const npcs::RestoreNpcsRequest& request) override;
-  std::expected<void, std::string> Pause(const wasm::PauseRequest& request) override;
-  std::expected<wasm::MatchClockResponse, std::string> MatchClock() override;
-  std::expected<void, std::string> HoldMatchClock(
-      const wasm::HoldMatchClockRequest& request) override;
-  std::expected<wasm::RiftResponse, std::string> Rift() override;
-  std::expected<void, std::string> StartRift(const wasm::StartRiftRequest& request) override;
-  std::expected<void, std::string> MoveEntity(const entities::MoveEntityRequest& request) override;
-  std::expected<void, std::string> PushEntity(const entities::PushEntityRequest& request) override;
-  std::expected<effects::SoundResponse, std::string> EmitSound(
-      const effects::EmitSoundRequest& request) override;
-  std::expected<void, std::string> AdjustSound(const effects::AdjustSoundRequest& request) override;
-  std::expected<void, std::string> StopSound(const effects::StopSoundRequest& request) override;
-  std::expected<void, std::string> Kill(const players::PlayerRequest& request) override;
-  std::expected<void, std::string> SetVelocity(
-      const movement::SetVelocityRequest& request) override;
-  std::expected<wasm::ButtonsResponse, std::string> Buttons(
-      const players::PlayerRequest& request) override;
-  std::expected<void, std::string> WatchMovement(
-      const movement::WatchMovementRequest& request) override;
-  std::expected<void, std::string> WatchControllers(
-      const controllers::WatchControllersRequest& request) override;
-  std::expected<void, std::string> WatchProjectiles(
-      const combat::ProjectileOptions& request) override;
-
-  // FieldAddress resolves a schema field of entity whose storage holds a
-  // value of type, or a list of them when list is set, refusing an entity
-  // that is not of class_name. A game rules class resolves on the game rules
-  // proxy entity to the field of the rules object, a model part class
-  // through the entity's body component, and a pawn services class through
-  // its schema-declared movement or observer services pointer.
-  std::expected<unsigned char*, std::string> FieldAddress(void* entity,
-                                                          const std::string& class_name,
-                                                          const std::string& field,
-                                                          fields::FieldType type, bool list);
-  // ModelPart returns the address of the part of entity's model that
-  // class_name names, as IsModelClass lists, through its body component,
-  // including CBaseAnimGraphController for animated model entities.
-  // actual is the entity's schema class.
-  std::expected<unsigned char*, std::string> ModelPart(void* entity, const void* actual,
-                                                       const std::string& class_name);
-
-  // StoreField writes a schema field of entity without telling the network
-  // it changed.
-  std::expected<void, std::string> StoreField(void* entity, const std::string& class_name,
-                                              const std::string& field, fields::FieldType type,
-                                              const fields::FieldValue& value);
-
-  // WriteBeforeSpawn returns the preparation that stores fields on an entity
-  // the world creates, before it spawns and is networked. fields must outlive
-  // the creation.
-  gameinterop::WorldEntities::Prepare WriteBeforeSpawn(
-      const google::protobuf::RepeatedPtrField<fields::FieldWrite>& fields);
-
-  // ScreenOwner returns the entity index a screen effect for slot belongs to.
-  std::expected<int32_t, std::string> ScreenOwner(int32_t slot);
-
-  // HumanSlots returns the slot bits of the connected human players, whose
-  // clients can hear a sound.
-  static uint64_t HumanSlots();
-
-  // PlaySound starts a sound on the source entity index, shaped and
-  // addressed by options.
-  std::expected<effects::SoundResponse, std::string> PlaySound(
-      const std::string& sound, int32_t source, const effects::SoundOptions& options);
-
-  // SetPaused pauses or resumes the game.
-  std::expected<void, std::string> SetPaused(bool paused);
-
-  // Keep stores a created object and returns its response.
-  objects::ObjectResponse Keep(Object object);
-
-  // HoldLevelSouls gives the slot's hero the souls its restored level needs,
-  // so the game's progression keeps the level.
-  std::expected<void, std::string> HoldLevelSouls(int32_t slot, int32_t level);
-  // ApplyRestore performs one stage of a hero restore's writes.
-  bool ApplyRestore(const HeroRestore::Sample& sample, const RestoreTarget& target,
-                    HeroRestore::Stage stage);
-
-  // TickRestores advances every hero restore and the unit restore by one
-  // frame and queues the ones that ended.
-  void TickRestores();
-
-  // PruneAudiences drops the audience of each entity the world no longer
-  // holds. A removed object's entity waits, sent to nobody, until then.
-  void PruneAudiences();
-  // RebuildPanels sends every client a full update when rebuild_panels_ asks
-  // for one, so each builds its client UI panels from their current layouts.
-  void RebuildPanels();
-
-  // ObjectHandle returns the entity handle of the mod's object id now, or
-  // nothing.
-  std::optional<uint32_t> ObjectHandle(uint32_t id) const;
-
-  // HoldClock sets the held match clock again, since the game advances it
-  // each frame.
-  void HoldClock();
-
-  // ReplicateClock sends the restored match clock to every client. The start
-  // time lives in the game rules, which clients receive through the rules
-  // entity; a plain write there reaches only clients that join later.
-  std::expected<void, std::string> ReplicateClock();
-
-  // LatchTime is the time a hero's stamina latch counts from: the simulation
-  // time without the ticks the game spent paused.
-  std::expected<float, std::string> LatchTime();
-
-  // SetCooldownLength makes seconds the length of the ability's cooldowns,
-  // or returns it to the game's own when seconds is negative.
-  std::expected<void, std::string> SetCooldownLength(int32_t slot, uint32_t handle, float seconds);
-
-  // LimitCharges makes maximum the most charges the player's ability holds.
-  std::expected<void, std::string> LimitCharges(int32_t slot, uint32_t handle, int32_t maximum);
-
-  // OwnedAbility returns the ability named name of slot's live hero.
-  std::expected<gameinterop::PawnObserver::Ability, std::string> OwnedAbility(
-      int32_t slot, std::string_view name);
-
-  // ModifierSource is the ability that applies a modifier keyed key to slot's
-  // live hero: the ability before the key's slash when the hero owns it, and
-  // otherwise, as for a top-level modifier, the hero's first ability.
-  std::expected<uint32_t, std::string> ModifierSource(int32_t slot, std::string_view key);
-
-  // ModifierWord is the word of an entity's modifier masks that holds one
-  // state, and the state's bit in it.
-  struct ModifierWord {
-    unsigned char* ordinary = nullptr;
-    unsigned char* predicted = nullptr;
-    uint32_t bit = 0;
-  };
-
-  // EntityModifiers returns the address of each modifier entity holds, in
-  // the game's order, or none for an entity without a modifier property.
-  std::expected<std::vector<unsigned char*>, std::string> EntityModifiers(void* entity);
-
-  // FindModifierWord locates state on entity, or returns nothing when the
-  // entity has no modifiers.
-  std::expected<std::optional<ModifierWord>, std::string> FindModifierWord(
-      void* entity, const std::string& state);
-
-  // ApplyHolds sets every held modifier state again, since the game
-  // recomputes states each frame and on teleport, and forgets a hold whose
-  // entity is gone. It gives held modifiers back to living heroes that lost
-  // them.
-  void ApplyHolds();
-
-  // SeatAssignedPlayers retries pending host seats and records a seat only
-  // after its native operation succeeds for the same connection generation.
-  void SeatAssignedPlayers();
-  // SeatAssignedPlayer applies one pending host seat without choosing a hero.
-  std::expected<void, std::string> SeatAssignedPlayer(int32_t slot, uint32_t generation,
-                                                      uint64_t steam_id, int32_t team);
-
-  // SeatPlayers seats each player who has no team on the smaller side, with
-  // no hero, while team seating or free-for-all is on. A host that cannot
-  // seat a player leaves the game's own team screen to them.
-  void SeatPlayers();
-  // ApplyFreeForAll holds friendly fire on every living hero in free-for-all.
-  void ApplyFreeForAll();
-  // EnableRelations makes teammates enemies to abilities and projectiles,
-  // installing the relations on first use.
-  void EnableRelations();
-  // ReleaseFreeForAll gives back the friendly fire holds free-for-all took
-  // and restores the stock team relations.
-  void ReleaseFreeForAll();
-
-  // Silence installs the voice hook while the mod silences any concept, then
-  // reports the concept names the game did not know, from unknown.
-  std::expected<void, std::string> Silence(const std::string& unknown);
-
-  // EnsureHeldModifier resolves key with no expiry once for all active holds.
-  std::expected<void, std::string> EnsureHeldModifier(const std::string& key);
-
-  // EntityAbilityHandle returns the owned ability handle when handle is a
-  // player's hero that owns key's parent ability, or kInvalidEHandleIndex.
-  uint32_t EntityAbilityHandle(uint32_t handle, std::string_view key);
-
-  // RenewModifier gives slot's living hero the held modifier when it lacks
-  // it. A dead or absent hero waits for its return.
-  std::expected<void, std::string> RenewModifier(int32_t slot, const std::string& key);
-
-  // RenewEntityModifier gives handle's live entity the held modifier when it
-  // lacks it. When initial is true, a dead entity fails the hold.
-  std::expected<void, std::string> RenewEntityModifier(uint32_t handle, const std::string& key,
-                                                       bool initial);
-
-  // ReleaseModifier ends slot's hold on key and restores the modifier's
-  // duration once nothing holds it.
-  void ReleaseModifier(int32_t slot, const std::string& key);
-
-  // ReleaseEntityModifier ends handle's hold on key and restores the modifier's
-  // duration once nothing holds it.
-  void ReleaseEntityModifier(uint32_t handle, const std::string& key);
-
-  // RestoreUnusedModifier restores and forgets key once no slot or entity holds
-  // it.
-  void RestoreUnusedModifier(const std::string& key);
-
-  // ReleaseModifiers ends every modifier hold.
-  void ReleaseModifiers();
-
-  // SetModifierState sets or clears state in entity's ordinary mask and
-  // replicates the change.
-  std::expected<void, std::string> SetModifierState(uint32_t entity, const std::string& state,
-                                                    bool active);
-
-  // World returns this world's unit operations.
-  std::expected<gameinterop::WorldEntities*, std::string> World();
-
-  // Live returns the observed pawn of slot for this frame.
-  std::expected<gameinterop::PawnObserver::Sample, std::string> Live(int32_t slot);
-
-  // LivePawn returns the pawn Live would observe for slot, without reading its
-  // sample, for a call that only acts on the hero. The pointer is borrowed for
-  // the call.
-  std::expected<void*, std::string> LivePawn(int32_t slot) const;
-  // FillPawn copies the player's sampled hero into pawn, as Pawn and Pawns
-  // answer it.
-  void FillPawn(int32_t slot, const gameinterop::PawnObserver::Sample& sample, players::Pawn* pawn);
-
-  // Combatant resolves a hero or unit that can safely receive damage events.
-  std::expected<void*, std::string> Combatant(uint32_t handle);
-
-  // Entity resolves a handle to its live entity.
-  std::expected<void*, std::string> Entity(uint32_t handle) const;
-
-  // ObserveFrom binds slot's camera, as Watch and FreeCamera do, sets its
-  // observer mode and target and replicates them, and returns the camera pawn.
-  std::expected<void*, std::string> ObserveFrom(int32_t slot, uint8_t mode, uint32_t target);
-
-  // TrackProjectiles queues a Launch for each watched projectile that
-  // appeared since the last frame.
-  void TrackProjectiles();
-
-  // Watching returns the Impact event for a projectile the mod watches, or
-  // nothing.
-  std::optional<combat::ImpactEvent> Watching(void* entity,
-                                              const gameinterop::TraceResult& contact);
-
-  // Owner returns a projectile's owning entity and the slot of the player
-  // whose hero it is, or -1.
-  std::pair<uint32_t, int32_t> Owner(void* entity);
-
-  // SceneNode returns an entity's scene node, or null for an entity with no
-  // place in the world.
-  unsigned char* SceneNode(void* entity);
-
-  // Origin returns where an entity is.
-  std::optional<std::array<float, 3>> Origin(void* entity);
-
-  // SceneVector reads a three-float field of an entity's scene node, such as
-  // m_vecAbsOrigin or m_angAbsRotation.
-  std::optional<std::array<float, 3>> SceneVector(void* entity, const std::string& field);
-
-  // NearestZiplineNode returns where the zipline node nearest pawn stands
-  // among those on lane that pawn's team may ride.
-  std::expected<std::array<float, 3>, std::string> NearestZiplineNode(void* pawn, int32_t lane);
-
-  // ImbuedAbilities returns the definition ids of the abilities that the
-  // ability with handle, owned by slot's hero, imbues; empty for most.
-  std::vector<uint32_t> ImbuedAbilities(int32_t slot, uint32_t handle);
-
-  // RemoveWorld removes the objects, units and bots.
-  void RemoveWorld();
-
-  // Depart records that the bot in slot was disconnected.
-  void Depart(int32_t slot);
-
   // services_ outlives the game.
   GameServices& services_;
   // engine_ outlives the game; the host owns it.
   EngineHost* engine_;
-  gameinterop::PawnObserver observer_;
-  std::map<uint32_t, Object> objects_;
-  // visibility_ is who receives the mod's objects and entities.
-  Visibility visibility_;
-  // rebuild_panels_ asks every client for a full update at the next frame,
-  // after the mod wrote a client UI entity's layout.
-  bool rebuild_panels_ = false;
-  // apart_ is the slot bits of the players Apart keeps out of sight.
-  uint64_t apart_ = 0;
-  // watched_ maps each player Watch points at a hero to that hero's entity
-  // handle, until another camera call or Unwatch. A player watching a hero
-  // inside an apart game receives that game's heroes.
-  std::map<int32_t, uint32_t> watched_;
-  // picks_ holds each player's own Change Hero pick until it lands.
-  HeroPicks picks_;
-  // fog_ is the world's fog controller, which the fog objects need; it is
-  // created with the first and removed after the objects.
-  std::unique_ptr<render::WorldEffect> fog_;
-  uint32_t next_object_ = 1;
-  // world_ creates and steers entities in the loaded world; created_ are the
-  // entities, units and pickups the mod created, and spawned_ is true until
-  // the units' placement finishes.
-  std::optional<gameinterop::WorldEntities> world_;
-  std::set<uint32_t> created_;
-  // scaled_ maps each entity the mod rescaled but did not create, such as a
-  // hero, to the scale it had before the mod's first SetAbsScale; Clear puts
-  // it back, so the next mod in the game starts from the game's own sizes.
-  std::map<uint32_t, float> scaled_;
-  bool spawned_ = false;
-  // bots_ is the slots of the bots the mod added.
-  std::set<int32_t> bots_;
-  // departing_ maps each removed bot's slot to its connection generation
-  // until the slot empties or another connection takes it.
-  std::map<int32_t, uint32_t> departing_;
-  std::set<int32_t> frozen_;
-  // movers_ is the players whose movement the mod watches.
-  std::set<int32_t> movers_;
 
-  // steers_ maps each steered player to the command its hero replays.
-  std::map<int32_t, movement::Steering> steers_;
-  // drives_ maps each driven bot's slot to the command its hero runs.
-  std::map<int32_t, gameinterop::CommandHook::Command> drives_;
-  // held_ is the modifier states the mod holds, by entity handle and name;
-  // ApplyHolds sets them again.
-  std::set<std::pair<uint32_t, std::string>> held_;
-  // free_for_all_ is true while the host seats players and holds friendly fire,
-  // and team_seating_ while it only seats them; ffa_held_ is the hero pawns it
-  // holds friendly fire on, and seat_failed_ the players it could not seat, so
-  // each failure is logged once.
-  bool free_for_all_ = false;
-  bool team_seating_ = false;
-  // assignments_ survives Clear: the host owns it, independently of the mod.
-  TeamSeating assignments_;
-
-  // addon_ is the running mod's content addon.
-  std::string addon_;
-  std::set<uint32_t> ffa_held_;
-  std::set<int32_t> seat_failed_;
-  // held_modifiers_ and held_entity_modifiers_ are the modifiers the mod holds,
-  // by player slot or entity handle and modifier key; modifiers_ resolves each
-  // held key.
-  std::set<std::pair<int32_t, std::string>> held_modifiers_;
-  std::set<std::pair<uint32_t, std::string>> held_entity_modifiers_;
-  std::map<std::string, gameinterop::AbilityModifier, std::less<>> modifiers_;
-
-  // cooldown_ holds the cooldown lengths the mod gave abilities, created the
-  // first time one is given; it puts the game's own lengths back when the
-  // mod stops.
-  std::unique_ptr<gameinterop::AbilityCooldown> cooldown_;
-  // charge_limit_ holds the most charges the mod gave abilities, created the
-  // first time one is limited; it puts the game's own maximums back when the
-  // mod stops.
-  std::unique_ptr<gameinterop::AbilityChargeLimit> charge_limit_;
-  // input_ is the mod's blocks, presses, remap and watched buttons.
-  InputChanges input_;
-  // silenced_ is the voice concepts the mod keeps every hero from speaking,
-  // and silenced_players_ those it keeps from one player's hero, by slot.
-  std::set<int32_t> silenced_;
-  std::map<int32_t, std::set<int32_t>> silenced_players_;
-  // projectiles_ is the mod's projectile watch. projectiles_seen_ holds the
-  // watched projectiles of the last frame, and launches_ queues the new ones
-  // for the mod.
-  combat::ProjectileOptions projectiles_;
-  std::set<uint32_t> projectiles_seen_;
-  std::vector<combat::LaunchEvent> launches_;
-  // restores_ are the running hero restores by player slot, ticked once per
-  // frame; restored_ queues the ones that ended for the mod.
-  std::map<int32_t, HeroRestore> restores_;
-  uint64_t frames_ = 0;
-  std::vector<Restored> restored_;
-  // npc_restore_ is the running unit restore; npcs_restored_ is the result
-  // of the last one that ended, until the mod receives it.
-  std::optional<NpcRestore> npc_restore_;
-  std::optional<std::string> npcs_restored_;
-  // held_clock_ is the match time the mod holds; paused_ is true while the
-  // mod has the game paused.
-  std::optional<float> held_clock_;
-  // rules_entity_ is the handle of the game rules entity, found on first use.
-  uint32_t rules_entity_ = 0;
-  bool paused_ = false;
+  // The modules own their domains' state. modules_ lists them in the order
+  // they are built, each after the modules it reads. WorldReady runs them in
+  // that order; Frame, WorldEnding, Leave and Clear run them in reverse, so a
+  // module's frame work and release come before those of the modules it reads.
+  Roster players_{services_, [this](players::PlayersResponse& players) { Describe(players); }};
+  wasm::World world_{services_, engine_};
+  Match match_{services_, world_};
+  ApartPlayers apart_{services_, players_};
+  Fields fields_{services_, world_};
+  ModifierHolds modifiers_{services_, players_, world_};
+  wasm::Heroes heroes_{services_, players_};
+  Camera camera_{services_, players_, world_};
+  wasm::HeroMovement movement_{services_, players_, world_, modifiers_};
+  wasm::Input input_{services_};
+  Projectiles projectiles_{services_, players_,
+                           [this](const combat::ImpactEvent& event) { Impacted(event); }};
+  Restores restores_{services_, players_, world_, modifiers_, heroes_};
+  Seating seating_{services_, players_, modifiers_, [this](int32_t slot) { return Serves(slot); }};
+  wasm::Voice voice_{services_, players_};
+  // effects_ keeps no state, so it is not one of the modules.
+  Effects effects_{services_, engine_, players_};
+  std::array<Module*, 14> modules_{&players_,     &world_,    &match_,   &apart_,    &fields_,
+                                   &modifiers_,   &heroes_,   &camera_,  &movement_, &input_,
+                                   &projectiles_, &restores_, &seating_, &voice_};
 };
 
 }  // namespace modlock::wasm

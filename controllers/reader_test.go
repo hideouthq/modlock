@@ -7,6 +7,7 @@ import (
 	"maps"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -14,9 +15,9 @@ import (
 	pb "github.com/paralin/modlock/src/wasm/controllers"
 )
 
-// openSDL returns the loaded library, skipping the test when SDL3 is not
+// testSDL returns the loaded library, skipping the test when SDL3 is not
 // installed, with the joystick layers started on the test's locked thread.
-func openSDL(t *testing.T) *sdlLib {
+func testSDL(t *testing.T) *sdlLib {
 	t.Helper()
 	r, err := Open(nil)
 	if errors.Is(err, ErrUnavailable) {
@@ -85,7 +86,7 @@ func changed(frame *pb.ControllerFrame, id uint32) *pb.ControllerState {
 func TestStreamSendsFullThenChanges(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	lib := openSDL(t)
+	lib := testSDL(t)
 	if !lib.InitSubSystem(sdlInitJoystick | sdlInitGamepad) {
 		t.Fatal(lib.GetError())
 	}
@@ -170,7 +171,7 @@ func TestStreamSendsFullThenChanges(t *testing.T) {
 // TestRunFollowsHotplugAndStops runs the reader, sees a device attached
 // while it runs announced, and sees Run return once its context ends.
 func TestRunFollowsHotplugAndStops(t *testing.T) {
-	lib := openSDL(t)
+	lib := testSDL(t)
 	if !lib.InitSubSystem(sdlInitJoystick | sdlInitGamepad) {
 		t.Fatal(lib.GetError())
 	}
@@ -228,7 +229,7 @@ func TestRunFollowsHotplugAndStops(t *testing.T) {
 // TestRunStreamsVirtualDevices runs the reader with VirtualEnv set and
 // decodes the virtual gamepad's clock axis to within a few frames of now.
 func TestRunStreamsVirtualDevices(t *testing.T) {
-	lib := openSDL(t)
+	lib := testSDL(t)
 	t.Setenv(VirtualEnv, "1")
 	r := &Reader{lib: lib, log: slog.Default()}
 	r.Want(1)
@@ -263,5 +264,24 @@ func TestRunStreamsVirtualDevices(t *testing.T) {
 	}
 	if skew > MinInterval {
 		t.Fatalf("clock axis is %v behind", skew)
+	}
+}
+
+// TestMissingSDLSymbol checks both an early and a late missing function without
+// invoking any of the partially registered native functions.
+func TestMissingSDLSymbol(t *testing.T) {
+	for _, missing := range []string{"SDL_SetHint", "SDL_UpdateJoysticks"} {
+		t.Run(missing, func(t *testing.T) {
+			lib := &sdlLib{}
+			err := lib.register(func(name string) (uintptr, error) {
+				if name == missing {
+					return 0, errors.New("missing " + name)
+				}
+				return 1, nil
+			})
+			if err == nil || !strings.Contains(err.Error(), missing) {
+				t.Fatalf("register = %v; want missing %s", err, missing)
+			}
+		})
 	}
 }

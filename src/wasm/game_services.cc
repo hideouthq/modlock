@@ -164,7 +164,7 @@ std::expected<const gameinterop::HeroDefinitions*, std::string> GameServices::He
   return &*heroes_;
 }
 
-std::expected<const gameinterop::WorldEntities::Calls*, std::string> GameServices::WorldCalls() {
+std::expected<const gameinterop::WorldEntities::Calls*, std::string> GameServices::EntityCalls() {
   if (auto cached = Cache(world_calls_, &gameinterop::WorldEntities::ResolveCalls); !cached) {
     return std::unexpected(cached.error());
   }
@@ -321,6 +321,12 @@ std::expected<gameinterop::FreeForAllRelations*, std::string> GameServices::Rela
     return std::unexpected(cached.error());
   }
   return &*relations_;
+}
+
+void GameServices::DisableRelations() {
+  if (relations_) {
+    relations_->SetEnabled(false);
+  }
 }
 
 std::expected<render::WorldTextGameFactory*, std::string> GameServices::Text() {
